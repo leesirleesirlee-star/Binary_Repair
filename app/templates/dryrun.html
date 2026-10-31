@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Route A 接口样例（DRY-RUN）{% endblock %}
+
+{% block content %}
+<header class="page-head">
+  <p class="eyebrow">ROUTE A / INTERFACE V1 / HOST DRY-RUN</p>
+  <h1>证据视图样例（DRY-RUN）</h1>
+  <p class="lead">
+    这两个 JSON 是 M3 的 <strong>host dry-run</strong> 输出，不是 gate 证据。
+    本页只渲染原始 V0–V5 状态与产物，<strong>不计算 outcome</strong>；
+    结论必须来自 acceptance engine 的 <code>decision.json</code>。
+  </p>
+  <div class="chip-row">
+    <span class="chip">candidate c4a159…</span>
+    <span class="chip">status.json v1 · no outcome</span>
+    <span class="chip">decision.json · not generated</span>
+  </div>
+</header>
+
+<p class="limits" data-testid="dryrun-warning">
+  HOST DRY-RUN · 不是 formal gate 证据 · Gate 3 仍为 CONDITIONALLY FEASIBLE · Gate 4 仍为 NOT RUN
+  <br>映射说明（M4 裁定）：页面显示原始状态；进入 acceptance 前按
+  pass→passed、fail→failed、inconclusive→unknown、unsupported→not_run、timed_out→timed_out 显式映射，
+  不允许静默转换。
+</p>
+
+<div class="routes">
+  <article class="card evidence-card">
+    <h2>worker status.json（v1）</h2>
+    <dl class="facts">
+      <div><dt>route</dt><dd>{{ status.route }}</dd></div>
+      <div><dt>phase</dt><dd>{{ status.phase }}</dd></div>
+      <div><dt>job_id</dt><dd>{{ status.job_id }}</dd></div>
+      <div><dt>candidate</dt><dd><code>{{ status.candidate.sha256[:16] }}…</code></dd></div>
+      <div><dt>size</dt><dd>{{ status.candidate.size_bytes }} B</dd></div>
+      <div><dt>outcome 字段</dt><dd>无（由 decision.json 提供）</dd></div>
+    </dl>
+
+    <h3>产物</h3>
+    <ul class="artifacts">
+      {% for art in status.artifacts %}
+      <li>
+        <code>{{ art.role }}</code>
+        <span class="muted">{{ art.relative_path }}</span>
+        <span class="hash-mini">sha256 {{ art.sha256[:16] }}… · {{ art.size_bytes }} B</span>
+      </li>
+      {% endfor %}
+    </ul>
+
+    <h3>evidence（worker 原始结果，不是 outcome）</h3>
+    <ul class="obligation-list">
+      {% for item in status.evidence %}
+      <li>
+        <span class="result result-{{ 'passed' if item.result == 'pass' else ('failed' if item.result == 'fail' else item.result) }}">{{ item.result }}</span>
+        <code>{{ item.obligation }}</code>
+        {% if item.evidence_path %}<span class="muted">{{ item.evidence_path }}</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </article>
+
+  <article class="card evidence-card">
+    <h2>result-bundle gates（V0–V5）</h2>
+    <table class="obligations">
+      <thead><tr><th>Gate</th><th>status</th><th>missing / details</th><th>evidence</th></tr></thead>
+      <tbody>
+        {% for gate_id, gate in bundle.gates.items() %}
+        <tr>
+          <td><code>{{ gate_id }}</code></td>
+          <td>
+            <span class="result result-{{ 'passed' if gate.status == 'pass' else ('failed' if gate.status == 'fail' else gate.status) }}">{{ gate.status }}</span>
+          </td>
+          <td>
+            {% if gate.missing %}{{ gate.missing | join("; ") }}{% endif %}
+            {% if gate.details %}<span class="muted">{{ gate.details }}</span>{% endif %}
+          </td>
+          <td>
+            {% for ev in gate.evidence %}<span class="muted">{{ ev.role }}:{{ ev.relative_path }}</span>{% if not loop.last %}<br>{% endif %}{% endfor %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="muted">
+      identity：original <code>{{ bundle.identity.original_sha256[:16] }}…</code> ·
+      contract <code>{{ bundle.identity.contract_sha256[:16] }}…</code> ·
+      candidate <code>{{ bundle.identity.candidate_sha256[:16] }}…</code>
+    </p>
+  </article>
+</div>
+
+<section class="card note">
+  <h2>decision.json（acceptance engine）</h2>
+  {% if decision %}
+  <p>outcome：<strong>{{ decision.outcome }}</strong>{% if decision.reason_code %} · reason {{ decision.reason_code }}{% endif %}</p>
+  {% else %}
+  <p class="muted" data-testid="no-decision">尚无 decision.json —— UI 不计算六种 outcome；等 acceptance engine 产出后再渲染。</p>
+  {% endif %}
+  <p class="muted">本页仅用于接口对齐与证据视图开发；不构成本地/正式 gate 结论。</p>
+</section>
+{% endblock %}

@@ -1,0 +1,20 @@
+{
+  "route": "route_a",
+  "candidate_sha256": "c4a1592157a2858fcf2dd52623b6ae8c280355ce735a1c224530845569bcaa82",
+  "results": {
+    "V0": "passed",
+    "V1": "unknown",
+    "V2": "not_run",
+    "V3": "unknown",
+    "V4": "not_run",
+    "V5": "not_run"
+  },
+  "evidence_files": {},
+  "details": {
+    "V1": "LIEF structural view missing (evidence/v1/lief.json)",
+    "V2": "interface evidence missing",
+    "V3": "formal reverted-snapshot run missing",
+    "V4": "symbolic evidence missing",
+    "V5": "replay evidence missing"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "case_id": "CWE121_src_char_declare_cpy_51b",
+  "original_sha256": "aa42815704d9ffc65b3a49821b3cc6189126a738a7e02d668dec250982408393",
+  "tests": [
+    {
+      "id": "invalid-first",
+      "kind": "invalid",
+      "argv": [
+        "./original",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      ],
+      "stdin_literal": null,
+      "stdin_artifact": null,
+      "expected": {
+        "return_code": 1,
+        "stdout": "",
+        "stderr": "ERROR: input exceeds destination capacity\n",
+        "allowed_output_files": []
+      },
+      "rationale": "First input with len+1 > DEST_CAPACITY (50+1=51>50). Required repaired behaviour: defined error path, no out-of-bounds access. Original exits 0 with a silent 1-byte overflow, so it fails this case by design."
+    },
+    {
+      "id": "invalid-longer",
+      "kind": "invalid",
+      "argv": [
+        "./original",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      ],
+      "stdin_literal": null,
+      "stdin_artifact": null,
+      "expected": {
+        "return_code": 1,
+        "stdout": "",
+        "stderr": "ERROR: input exceeds destination capacity\n",
+        "allowed_output_files": []
+      },
+      "rationale": "Clearly overlong input (len+1=101>50). Required repaired behaviour: same error path. Original dies with SIGSEGV (exit 139), so it fails this case by design."
+    }
+  ]
+}

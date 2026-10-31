@@ -1,0 +1,30 @@
+# Keep source, docs, manifests, and fixtures byte-stable across platforms.
+* text=auto
+
+*.py   text eol=lf
+*.md   text eol=lf
+*.json text eol=lf
+*.sql  text eol=lf
+*.sh   text eol=lf
+*.c    text eol=lf
+*.h    text eol=lf
+*.java text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+
+*.ps1  text eol=crlf
+*.bat  text eol=crlf
+
+# Fixture manifests are hashed as bytes; never let Git rewrite them.
+fixtures/public/**/tests/*.json -text
+
+*.elf  binary
+*.bin  binary
+*.zip  binary
+# Evidence packages are hash-bound: every byte (including CRLF) must survive
+# clone/checkout exactly, or SHA256SUMS verification fails on a fresh clone.
+docs/handoffs/evidence/** -text
+*.pdf binary
+*.vmdk binary
+*.png binary
+*.jpg binary

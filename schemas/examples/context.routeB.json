@@ -1,0 +1,18 @@
+{
+  "route": "route_b",
+  "original_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "contract_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "analysis_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "target_entry": "copy_name",
+  "target_signature": "int copy_name(char *dst, const char *src, unsigned int n)",
+  "contract_summary": "Valid: 0..15 bytes. Invalid: >=16 returns -1 without writing. No new calls.",
+  "allowed_evidence_ids": [
+    "ev_ghidra_export",
+    "ev_roundtrip_baseline"
+  ],
+  "templates": [],
+  "recovered_function_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "recovered_c": "int copy_name(char *dst, const char *src, unsigned int n)\n{\n    unsigned int i;\n    for (i = 0; i < n; i++) {\n        dst[i] = src[i];\n    }\n    dst[i] = '\\0';\n    return (int)i;\n}\n",
+  "allowed_calls": [],
+  "max_replacement_chars": 8000
+}

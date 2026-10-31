@@ -1,0 +1,40 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+pytest-of-*/
+pytest-cache-files-*/
+pytest_tmp*/
+pytest_cache*/
+
+# Local config and secrets (never commit)
+.env
+.env.*
+!.env.example
+
+# Runtime artifacts: job data, pids, browser temp dirs
+var/
+*.log
+
+# Local scratch (agent work areas, vendored test deps, pip and pytest temp dirs)
+_scratch/
+pip_tmp/
+pip_cache/
+pytest_deps/
+.write-probe.tmp
+
+# Local delivery artifacts (git bundles/archives for teammates)
+/delivery/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+binaryrepair-synthetic-*/

@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://binaryrepair.local/schemas/template.v1.json",
+  "$defs": {
+    "TemplateParam": {
+      "additionalProperties": false,
+      "properties": {
+        "min_value": {
+          "title": "Min Value",
+          "type": "integer",
+          "description": "Inclusive lower bound."
+        },
+        "max_value": {
+          "title": "Max Value",
+          "type": "integer",
+          "description": "Inclusive upper bound."
+        }
+      },
+      "required": [
+        "min_value",
+        "max_value"
+      ],
+      "title": "TemplateParam",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "A reviewed, deterministic repair template. The model may only parameterize it.",
+  "properties": {
+    "template_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Template Id",
+      "type": "string",
+      "description": "Stable identifier used by the deterministic builder."
+    },
+    "description": {
+      "maxLength": 300,
+      "minLength": 1,
+      "title": "Description",
+      "type": "string",
+      "description": "What the template does, in one sentence."
+    },
+    "parameters": {
+      "additionalProperties": {
+        "$ref": "#/$defs/TemplateParam"
+      },
+      "title": "Parameters",
+      "type": "object",
+      "description": "Parameters the model must supply, with inclusive integer ranges."
+    }
+  },
+  "required": [
+    "template_id",
+    "description"
+  ],
+  "title": "TemplateSpec",
+  "type": "object"
+}

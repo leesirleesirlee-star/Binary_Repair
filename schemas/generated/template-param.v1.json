@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://binaryrepair.local/schemas/template-param.v1.json",
+  "additionalProperties": false,
+  "properties": {
+    "min_value": {
+      "title": "Min Value",
+      "type": "integer",
+      "description": "Inclusive lower bound."
+    },
+    "max_value": {
+      "title": "Max Value",
+      "type": "integer",
+      "description": "Inclusive upper bound."
+    }
+  },
+  "required": [
+    "min_value",
+    "max_value"
+  ],
+  "title": "TemplateParam",
+  "type": "object"
+}

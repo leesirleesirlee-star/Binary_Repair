@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Evidence report {{ bundle.job.id }}</title>
+<style>
+  :root { color-scheme: light; }
+  body { font-family: "Segoe UI", Arial, sans-serif; margin: 32px; color: #1f2328; line-height: 1.45; }
+  h1, h2, h3 { margin: 1.2em 0 0.4em; }
+  h1 { font-size: 26px; }
+  h2 { font-size: 19px; border-bottom: 1px solid #d0d7de; padding-bottom: 4px; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0 16px; font-size: 13px; }
+  th, td { border: 1px solid #d0d7de; padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+  code { font-family: Consolas, monospace; font-size: 12px; word-break: break-all; }
+  pre { background: #f6f8fa; padding: 12px; border: 1px solid #d0d7de; overflow: auto; }
+  .disclaimer { border: 2px solid #9a6700; background: #fff8c5; padding: 10px 14px; font-weight: 600; }
+  .demo { border: 2px solid #8250df; background: #fbefff; padding: 10px 14px; font-weight: 600; }
+  .notrun { color: #9a6700; font-weight: 600; }
+  @media print { body { margin: 12mm; } .page-break { page-break-before: always; } }
+</style>
+</head>
+<body>
+<h1>BinaryRepair evidence report</h1>
+<p><strong>Job:</strong> <code>{{ bundle.job.id }}</code> · <strong>File:</strong> {{ bundle.job.filename }} · <strong>Phase:</strong> {{ bundle.job.phase }}</p>
+<p><strong>Original SHA-256:</strong> <code>{{ bundle.job.original_sha256 }}</code></p>
+<p><strong>Generated:</strong> {{ bundle.generated_at }} · <strong>Schema:</strong> v{{ bundle.schema_version }} · <strong>Language:</strong> {{ bundle.content_language }}</p>
+
+<p class="disclaimer">Not production approval. This report renders controller/acceptance data only; it does not compute an outcome.</p>
+{% if bundle.demo %}<p class="demo">DEMO DATA: synthetic inputs; no real repair was executed.</p>{% endif %}
+
+<h2>Contract</h2>
+<table>
+  <tr><th>Revision</th><td>{{ bundle.contract.revision }}</td></tr>
+  <tr><th>Contract SHA-256</th><td><code>{{ bundle.contract.sha256 }}</code></td></tr>
+  <tr><th>Reviewed scope SHA-256</th><td><code>{{ bundle.contract.reviewed_scope_sha256 }}</code></td></tr>
+</table>
+
+<h2>Routes</h2>
+{% for key, route in bundle.routes.items() %}
+<h3>Route {{ key }}</h3>
+<table>
+  <tr><th>Outcome (from controller)</th><td>{{ route.outcome if route.outcome is not none else "not_run" }}</td></tr>
+  <tr><th>Reason</th><td>{{ route.reason or "not_run" }}</td></tr>
+  <tr><th>Failing obligation</th><td>{{ route.failing_obligation or "not_run" }}</td></tr>
+  <tr><th>Candidate SHA-256</th><td><code>{{ route.candidate_sha256 or "not_available" }}</code></td></tr>
+  <tr><th>Verification</th><td>{{ route.verification or "not_run" }}</td></tr>
+</table>
+<table>
+  <thead><tr><th>ID</th><th>Kind</th><th>Required</th><th>Result</th><th>Scope</th><th>Reason</th></tr></thead>
+  <tbody>
+  {% for row in route.obligations %}
+    <tr>
+      <td>{{ row.id or row.kind }}</td>
+      <td>{{ row.kind or "" }}</td>
+      <td>{{ "yes" if row.required else "no" }}</td>
+      <td class="{{ 'notrun' if row.result != 'passed' else '' }}">{{ row.result or "not_run" }}</td>
+      <td>{{ row.scope or "" }}</td>
+      <td>{{ row.reason or row.detail or "" }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="notrun">not_run (no obligation rows returned by the controller)</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% if route.evidence %}
+<p><strong>Evidence artifacts:</strong></p>
+<ul>
+  {% for item in route.evidence %}
+  <li><code>{{ item.artifact_id }}</code> · {{ item.name or "not_available" }} · sha256 <code>{{ item.sha256 or "not_available" }}</code> · {{ "available" if item.available else "not_available" }}</li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="notrun">Evidence artifacts: not_available</p>
+{% endif %}
+{% endfor %}
+
+<h2>Artifacts</h2>
+<table>
+  <thead><tr><th>Name</th><th>Route</th><th>Role</th><th>SHA-256</th><th>Size</th><th>Download</th></tr></thead>
+  <tbody>
+  {% for artifact in bundle.artifacts %}
+    <tr>
+      <td>{{ artifact.name }}</td>
+      <td>{{ artifact.route }}</td>
+      <td>{{ artifact.role }}</td>
+      <td><code>{{ artifact.sha256 or "not_available" }}</code></td>
+      <td>{{ artifact.size_bytes if artifact.size_bytes is not none else "not_available" }}</td>
+      <td>{{ "available" if artifact.download else "not_available" }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="notrun">not_available (no artifacts)</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>Limitations</h2>
+<ul>
+{% for item in bundle.limitations %}
+  <li>{{ item }}</li>
+{% else %}
+  <li>None recorded.</li>
+{% endfor %}
+</ul>
+
+<h2>Not run / missing</h2>
+<table>
+  <thead><tr><th>Route</th><th>Obligation</th><th>Result</th><th>Reason</th></tr></thead>
+  <tbody>
+  {% for item in bundle.not_run %}
+    <tr><td>{{ item.route }}</td><td>{{ item.obligation }}</td><td class="notrun">{{ item.result }}</td><td>{{ item.reason or "" }}</td></tr>
+  {% else %}
+    <tr><td colspan="4">No non-passing obligations were returned.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>SHA256SUMS</h2>
+<pre>{% for line in sha_lines %}{{ line }}
+{% endfor %}</pre>
+
+<p class="page-break">Manifest SHA-256: <code>{{ bundle.manifest_sha256 }}</code></p>
+</body>
+</html>

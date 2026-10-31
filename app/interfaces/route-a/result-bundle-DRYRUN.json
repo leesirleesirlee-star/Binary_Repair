@@ -1,0 +1,216 @@
+{
+  "schema_version": 1,
+  "job_id": "demo",
+  "route": "A",
+  "generated_at": "2026-10-22T10:43:50Z",
+  "identity": {
+    "original_sha256": "aa42815704d9ffc65b3a49821b3cc6189126a738a7e02d668dec250982408393",
+    "original_size": 26792,
+    "contract_sha256": "24bfe568e162be57de013abaeda96060d7edf4cad4b2eca0b003d929d9ec4e37",
+    "manifest_set_sha256": "a564f0397a741b1a4fc386a3149d54550c1bfe7c02958309e021fb6f03333a78",
+    "valid_sha256": "17b2ee399db5ef43ba14978c497d71dc45d28aaa685ff90a60baaabc6f221e76",
+    "invalid_sha256": "d493f370a37b25f910eb72cb6f9202856e46be0e42e76922db38a30769f8190d",
+    "candidate_sha256": "c4a1592157a2858fcf2dd52623b6ae8c280355ce735a1c224530845569bcaa82",
+    "candidate_size": 26792
+  },
+  "environment": {
+    "image": {
+      "manifest_path": "../../../worklogs/2026-10-22/isolation-manifest.txt",
+      "manifest_sha256": "142849c724a4a76ce9d3148bab2eaf3286b036ae52ea8c1e2d4bf681c65d628e"
+    },
+    "isolation": {},
+    "tool_versions": {
+      "python": "3.15.0"
+    }
+  },
+  "gates": {
+    "V0": {
+      "status": "pass",
+      "details": {
+        "original_sha256": "aa42815704d9ffc65b3a49821b3cc6189126a738a7e02d668dec250982408393",
+        "candidate_sha256": "c4a1592157a2858fcf2dd52623b6ae8c280355ce735a1c224530845569bcaa82",
+        "contract_sha256": "24bfe568e162be57de013abaeda96060d7edf4cad4b2eca0b003d929d9ec4e37",
+        "manifest_set_sha256": "a564f0397a741b1a4fc386a3149d54550c1bfe7c02958309e021fb6f03333a78"
+      },
+      "evidence": [
+        {
+          "role": "original",
+          "relative_path": "original.elf",
+          "sha256": "aa42815704d9ffc65b3a49821b3cc6189126a738a7e02d668dec250982408393",
+          "size_bytes": 26792
+        },
+        {
+          "role": "contract",
+          "relative_path": "contract.json",
+          "sha256": "15f6b492608e8c137f2612058bf43b90173284aec86d8c51b25d09903d0ad8df",
+          "size_bytes": 1998
+        },
+        {
+          "role": "valid_manifest",
+          "relative_path": "tests/valid.json",
+          "sha256": "17b2ee399db5ef43ba14978c497d71dc45d28aaa685ff90a60baaabc6f221e76",
+          "size_bytes": 1951
+        },
+        {
+          "role": "invalid_manifest",
+          "relative_path": "tests/invalid.json",
+          "sha256": "d493f370a37b25f910eb72cb6f9202856e46be0e42e76922db38a30769f8190d",
+          "size_bytes": 1460
+        },
+        {
+          "role": "candidate",
+          "relative_path": "route_a/candidate.elf",
+          "sha256": "c4a1592157a2858fcf2dd52623b6ae8c280355ce735a1c224530845569bcaa82",
+          "size_bytes": 26792
+        },
+        {
+          "role": "status",
+          "relative_path": "route_a/status.json",
+          "sha256": "e7c99a8d93d7e8a7a888eda9899f687a4806d433fb86afc4a03b8eab26c5dbac",
+          "size_bytes": 2227
+        }
+      ],
+      "missing": []
+    },
+    "V1": {
+      "status": "inconclusive",
+      "details": {
+        "audit_pass": true
+      },
+      "evidence": [
+        {
+          "role": "edit_manifest",
+          "relative_path": "route_a/edit-manifest.json",
+          "sha256": "710657bf9d21068444c4a2d85e05c1e57557625604c589d8f8268edfa1a10fc0",
+          "size_bytes": 2658
+        },
+        {
+          "role": "audit",
+          "relative_path": "route_a/audit.json",
+          "sha256": "e915cb8bb211ed4305400ec02d0cb80847fe98bb1d27b264ac1032ade5165821",
+          "size_bytes": 305
+        },
+        {
+          "role": "readelf",
+          "relative_path": "route_a/readelf-audit.txt",
+          "sha256": "086ce7c87f535fbc5ed583da529a05ddfae0c75846c6a543bd4aaab1d02825c5",
+          "size_bytes": 7829
+        }
+      ],
+      "missing": [
+        "LIEF structural view missing (evidence/v1/lief.json)"
+      ]
+    },
+    "V2": {
+      "status": "not_run",
+      "details": {},
+      "evidence": [],
+      "missing": [
+        "interface evidence missing"
+      ]
+    },
+    "V3": {
+      "status": "inconclusive",
+      "details": {
+        "repaired_pass": true,
+        "passed": 6,
+        "total": 6,
+        "note": "non-formal run (not a reverted snapshot)"
+      },
+      "evidence": [
+        {
+          "role": "manifest_repaired",
+          "relative_path": "evidence/v3/manifest-repaired.json",
+          "sha256": "9ab68ece2629a1d0bcb1f68382ada973a1887c5571f5cce6ec49e5ae00e7adb9",
+          "size_bytes": 2884
+        }
+      ],
+      "missing": [
+        "formal reverted-snapshot run missing"
+      ]
+    },
+    "V4": {
+      "status": "not_run",
+      "details": {},
+      "evidence": [],
+      "missing": [
+        "symbolic evidence missing"
+      ]
+    },
+    "V5": {
+      "status": "not_run",
+      "details": {},
+      "evidence": [],
+      "missing": [
+        "replay evidence missing"
+      ]
+    }
+  },
+  "evidence": [
+    {
+      "role": "original",
+      "relative_path": "original.elf",
+      "sha256": "aa42815704d9ffc65b3a49821b3cc6189126a738a7e02d668dec250982408393",
+      "size_bytes": 26792
+    },
+    {
+      "role": "contract",
+      "relative_path": "contract.json",
+      "sha256": "15f6b492608e8c137f2612058bf43b90173284aec86d8c51b25d09903d0ad8df",
+      "size_bytes": 1998
+    },
+    {
+      "role": "valid_manifest",
+      "relative_path": "tests/valid.json",
+      "sha256": "17b2ee399db5ef43ba14978c497d71dc45d28aaa685ff90a60baaabc6f221e76",
+      "size_bytes": 1951
+    },
+    {
+      "role": "invalid_manifest",
+      "relative_path": "tests/invalid.json",
+      "sha256": "d493f370a37b25f910eb72cb6f9202856e46be0e42e76922db38a30769f8190d",
+      "size_bytes": 1460
+    },
+    {
+      "role": "candidate",
+      "relative_path": "route_a/candidate.elf",
+      "sha256": "c4a1592157a2858fcf2dd52623b6ae8c280355ce735a1c224530845569bcaa82",
+      "size_bytes": 26792
+    },
+    {
+      "role": "status",
+      "relative_path": "route_a/status.json",
+      "sha256": "e7c99a8d93d7e8a7a888eda9899f687a4806d433fb86afc4a03b8eab26c5dbac",
+      "size_bytes": 2227
+    },
+    {
+      "role": "edit_manifest",
+      "relative_path": "route_a/edit-manifest.json",
+      "sha256": "710657bf9d21068444c4a2d85e05c1e57557625604c589d8f8268edfa1a10fc0",
+      "size_bytes": 2658
+    },
+    {
+      "role": "audit",
+      "relative_path": "route_a/audit.json",
+      "sha256": "e915cb8bb211ed4305400ec02d0cb80847fe98bb1d27b264ac1032ade5165821",
+      "size_bytes": 305
+    },
+    {
+      "role": "readelf",
+      "relative_path": "route_a/readelf-audit.txt",
+      "sha256": "086ce7c87f535fbc5ed583da529a05ddfae0c75846c6a543bd4aaab1d02825c5",
+      "size_bytes": 7829
+    },
+    {
+      "role": "worker_log",
+      "relative_path": "route_a/route_a.log",
+      "sha256": "d9495e78ac73926a9bdbefe113d8c341e25cfff1b48321d2bb1dabf8ac1d4237",
+      "size_bytes": 435
+    }
+  ],
+  "limitations": [
+    "No outcome is computed here; the acceptance engine owns the six outcome labels.",
+    "A non-formal run cannot satisfy V3; it is recorded as inconclusive.",
+    "V4 is function-level under explicit assumptions; it is never whole-program verification."
+  ]
+}

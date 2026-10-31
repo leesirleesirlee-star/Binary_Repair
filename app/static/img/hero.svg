@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900" role="img" aria-label="Misty digital ridgeline with hexadecimal data streams and a highlighted vulnerable instruction">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#050a0f"/>
+      <stop offset="0.45" stop-color="#0a1a24"/>
+      <stop offset="0.72" stop-color="#0d2733"/>
+      <stop offset="1" stop-color="#050b10"/>
+    </linearGradient>
+    <linearGradient id="mist" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8fd4dd" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#8fd4dd" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="ridgeA" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0e2a33"/>
+      <stop offset="1" stop-color="#05090d"/>
+    </linearGradient>
+    <linearGradient id="ridgeB" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0a1d25"/>
+      <stop offset="1" stop-color="#04070a"/>
+    </linearGradient>
+    <radialGradient id="warm" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#f0b03f" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#f0b03f" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="42"/>
+    </filter>
+    <filter id="soft2" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="16"/>
+    </filter>
+    <filter id="grain">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch"/>
+      <feColorMatrix type="saturate" values="0"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.05"/></feComponentTransfer>
+    </filter>
+    <linearGradient id="vignette" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#000000" stop-opacity="0.55"/>
+      <stop offset="0.38" stop-color="#000000" stop-opacity="0"/>
+      <stop offset="0.78" stop-color="#000000" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.88"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#sky)"/>
+
+  <!-- mist -->
+  <g filter="url(#soft)" opacity="0.85">
+    <ellipse cx="420" cy="430" rx="520" ry="150" fill="url(#mist)"/>
+    <ellipse cx="1180" cy="380" rx="560" ry="170" fill="url(#mist)"/>
+    <ellipse cx="820" cy="520" rx="760" ry="190" fill="url(#mist)" opacity="0.75"/>
+  </g>
+
+  <!-- far ridge -->
+  <path d="M0 520 L120 470 L250 505 L360 460 L470 512 L590 455 L700 505 L820 462 L930 512 L1050 470 L1170 515 L1290 468 L1400 512 L1500 480 L1600 515 L1600 900 L0 900 Z" fill="#0a2029" opacity="0.85" filter="url(#soft2)"/>
+
+  <!-- hexadecimal data streams -->
+  <g font-family="'Cascadia Mono', Consolas, monospace" font-size="13" letter-spacing="2.5" fill="#8fd4dd" opacity="0.20">
+    <text x="60" y="210">0f 1a 2b 3c 4d 5e 6f 70 81 92 a3 b4 c5 d6 e7 f8</text>
+    <text x="60" y="248">48 89 e5 48 83 ec 20 48 8d 45 e0 48 89 c7 48 8b 45</text>
+    <text x="60" y="286">e8 75 fe ff ff b8 00 00 00 00 c9 c3 90 90 90 90 90</text>
+    <text x="60" y="324">55 48 89 e5 41 57 41 56 41 55 41 54 53 48 83 ec 18</text>
+    <text x="60" y="362">7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00 00</text>
+    <text x="60" y="400">63 61 6c 6c 20 73 74 72 63 70 79 40 70 6c 74 00 00</text>
+    <text x="60" y="664">0f 1a 2b 3c 4d 5e 6f 70 81 92 a3 b4 c5 d6 e7 f8</text>
+    <text x="60" y="702">48 89 e5 48 83 ec 20 48 8d 45 e0 48 89 c7 48 8b 45</text>
+    <text x="60" y="740">e8 75 fe ff ff b8 00 00 00 00 c9 c3 90 90 90 90 90</text>
+    <text x="60" y="778">55 48 89 e5 41 57 41 56 41 55 41 54 53 48 83 ec 18</text>
+  </g>
+  <g font-family="'Cascadia Mono', Consolas, monospace" font-size="13" letter-spacing="2.5" fill="#8fd4dd" opacity="0.13">
+    <text x="1120" y="190">01101001 01101110 01110000 01110101 01110100</text>
+    <text x="1120" y="226">01100011 01101000 01100101 01100011 01101011</text>
+    <text x="1120" y="262">01100010 01101111 01110101 01101110 01100100</text>
+    <text x="1120" y="298">01110011 01110100 01100001 01100011 01101011</text>
+    <text x="1120" y="640">01101001 01101110 01110000 01110101 01110100</text>
+    <text x="1120" y="676">01100011 01101000 01100101 01100011 01101011</text>
+    <text x="1120" y="712">01100010 01101111 01110101 01101110 01100100</text>
+    <text x="1120" y="748">01110011 01110100 01100001 01100011 01101011</text>
+  </g>
+
+  <!-- near ridge -->
+  <path d="M0 640 L110 590 L220 625 L330 575 L450 630 L560 585 L680 640 L800 595 L920 645 L1040 600 L1160 650 L1280 605 L1400 648 L1510 610 L1600 650 L1600 900 L0 900 Z" fill="url(#ridgeA)"/>
+  <path d="M0 740 L140 700 L260 735 L390 690 L520 742 L650 700 L780 748 L910 705 L1040 752 L1170 710 L1300 756 L1430 718 L1600 760 L1600 900 L0 900 Z" fill="url(#ridgeB)"/>
+
+  <!-- warm accent / vignette / grain -->
+  <ellipse cx="1290" cy="260" rx="420" ry="220" fill="url(#warm)"/>
+  <rect width="1600" height="900" fill="url(#vignette)"/>
+  <rect width="1600" height="900" filter="url(#grain)" opacity="0.5"/>
+</svg>

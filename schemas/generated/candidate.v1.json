@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://binaryrepair.local/schemas/candidate.v1.json",
+  "additionalProperties": false,
+  "description": "Strict model output. Unknown fields are rejected, not ignored.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer",
+      "description": "Contract version. Bump only with a coordinated GUI + validation change."
+    },
+    "original_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Original Sha256",
+      "type": "string",
+      "description": "SHA-256 of the frozen original ELF; binds the candidate to one input."
+    },
+    "contract_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Contract Sha256",
+      "type": "string",
+      "description": "SHA-256 of the reviewed contract revision."
+    },
+    "analysis_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Analysis Sha256",
+      "type": "string",
+      "description": "SHA-256 of the binary-derived analysis bundle used for this candidate."
+    },
+    "route": {
+      "enum": [
+        "route_a",
+        "route_b"
+      ],
+      "title": "Route",
+      "type": "string",
+      "description": "Repair route: A = reviewed instruction template, B = recovered C."
+    },
+    "target_entry": {
+      "pattern": "^(?:[A-Za-z_][A-Za-z0-9_@.$]*|0x[0-9a-fA-F]{1,16})$",
+      "title": "Target Entry",
+      "type": "string",
+      "description": "Reviewed function entry the candidate is allowed to modify."
+    },
+    "evidence_ids": {
+      "items": {
+        "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
+        "type": "string"
+      },
+      "maxItems": 16,
+      "minItems": 1,
+      "title": "Evidence Ids",
+      "type": "array",
+      "description": "Server-issued evidence identifiers this candidate relies on."
+    },
+    "template_id": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Template Id",
+      "description": "Route A only: exactly one template offered in the request."
+    },
+    "parameters": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Parameters",
+      "description": "Route A only: exactly the template's parameters, integers inside range."
+    },
+    "recovered_function_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Recovered Function Sha256",
+      "description": "Route B only: hash of the recovered C supplied in the request."
+    },
+    "replacement_c": {
+      "anyOf": [
+        {
+          "maxLength": 20000,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Replacement C",
+      "description": "Route B only: complete C definition of the target function."
+    },
+    "expected_effects": {
+      "items": {
+        "maxLength": 512,
+        "type": "string"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "title": "Expected Effects",
+      "type": "array",
+      "description": "Claimed effects. Reviewed by humans; never treated as verified."
+    },
+    "assumptions": {
+      "items": {
+        "maxLength": 512,
+        "type": "string"
+      },
+      "maxItems": 32,
+      "title": "Assumptions",
+      "type": "array",
+      "description": "Conditions the candidate depends on."
+    },
+    "uncertainties": {
+      "items": {
+        "maxLength": 512,
+        "type": "string"
+      },
+      "maxItems": 32,
+      "title": "Uncertainties",
+      "type": "array",
+      "description": "Known gaps. An entry here does not by itself block validation."
+    }
+  },
+  "required": [
+    "schema_version",
+    "original_sha256",
+    "contract_sha256",
+    "analysis_sha256",
+    "route",
+    "target_entry",
+    "evidence_ids",
+    "expected_effects"
+  ],
+  "title": "CandidateV1",
+  "type": "object"
+}

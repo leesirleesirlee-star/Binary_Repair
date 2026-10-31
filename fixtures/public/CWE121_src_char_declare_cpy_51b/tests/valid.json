@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "case_id": "CWE121_src_char_declare_cpy_51b",
+  "original_sha256": "aa42815704d9ffc65b3a49821b3cc6189126a738a7e02d668dec250982408393",
+  "tests": [
+    {
+      "id": "valid-empty",
+      "kind": "valid",
+      "argv": [
+        "./original",
+        ""
+      ],
+      "stdin_literal": null,
+      "stdin_artifact": null,
+      "expected": {
+        "return_code": 0,
+        "stdout": "\n",
+        "stderr": "",
+        "allowed_output_files": []
+      },
+      "rationale": "Empty input: strcpy writes only the NUL; printLine emits an empty line. Measured on original.elf."
+    },
+    {
+      "id": "valid-smallest",
+      "kind": "valid",
+      "argv": [
+        "./original",
+        "A"
+      ],
+      "stdin_literal": null,
+      "stdin_artifact": null,
+      "expected": {
+        "return_code": 0,
+        "stdout": "A\n",
+        "stderr": "",
+        "allowed_output_files": []
+      },
+      "rationale": "Smallest non-empty input. Measured on original.elf."
+    },
+    {
+      "id": "valid-typical",
+      "kind": "valid",
+      "argv": [
+        "./original",
+        "AAAAAAAAAA"
+      ],
+      "stdin_literal": null,
+      "stdin_artifact": null,
+      "expected": {
+        "return_code": 0,
+        "stdout": "AAAAAAAAAA\n",
+        "stderr": "",
+        "allowed_output_files": []
+      },
+      "rationale": "Typical short input. Measured on original.elf."
+    },
+    {
+      "id": "valid-maximum",
+      "kind": "valid",
+      "argv": [
+        "./original",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      ],
+      "stdin_literal": null,
+      "stdin_artifact": null,
+      "expected": {
+        "return_code": 0,
+        "stdout": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n",
+        "stderr": "",
+        "allowed_output_files": []
+      },
+      "rationale": "Largest input that fits DEST_CAPACITY=50 once the NUL is counted (49+1). Measured on original.elf."
+    }
+  ]
+}

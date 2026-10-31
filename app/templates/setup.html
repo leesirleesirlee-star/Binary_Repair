@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>新建任务与契约复核 · BinaryRepair</title>
+  <link rel="stylesheet" href="/static/css/setup-handdrawn.css?v=20261022b">
+</head>
+<body class="paper" data-demo="0">
+  <header class="paper-top">
+    <a class="paper-brand" href="/">BinaryRepair</a>
+    <a class="paper-back" href="/">← 返回起始页</a>
+  </header>
+
+  <main class="paper-wrap">
+    <p class="paper-eyebrow">BINARY REPAIR · SETUP · {{ backend_note }}</p>
+    <h1 class="paper-title">新建任务与契约复核</h1>
+    <p class="paper-lead">上传二进制、说明缺陷、给出复现与有效输入测试，然后确认安全契约。复核批准后，两条路线必须引用<strong>同一个</strong>输入哈希和契约。</p>
+
+    <div class="paper-tip">
+      <div class="paper-tip-text">
+        <strong>我们可能需要你的帮助</strong>
+        <p>这是演示工作台：样本只计算 SHA-256，不解析、不执行；契约需要复核者批准后才能启动修复。把带 <code>token</code> 的地址留给自己，不要贴到公开地方。</p>
+      </div>
+      <svg class="doodle-heart" viewBox="0 0 60 60" aria-hidden="true">
+        <path d="M30 48 C12 34 8 24 14 17 C19 11 27 13 30 20 C33 13 41 11 46 17 C52 24 48 34 30 48 Z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>
+        <path d="M22 26 C24 23 28 23 30 27" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+    </div>
+
+    <div class="wizard" data-wizard data-step="home">
+      <div class="wizard-view" data-view="home">
+        <div class="choice-grid">
+          <button type="button" class="choice-card" data-goto="input" data-testid="choice-input">
+            <span class="choice-top"><span class="choice-no">01</span><span class="choice-tag">必填</span></span>
+            <span class="choice-title">样本与输入</span>
+            <span class="choice-desc">上传 Linux x86-64 ELF 样本，说明缺陷，给出复现输入与有效输入测试。</span>
+            <span class="choice-meta">只计算 SHA-256，不解析、不执行</span>
+            <span class="choice-arrow">进入填写 →</span>
+          </button>
+
+          <button type="button" class="choice-card" data-goto="contract" data-testid="choice-contract">
+            <span class="choice-top"><span class="choice-no">02</span><span class="choice-tag">可编辑默认值</span></span>
+            <span class="choice-title">安全契约</span>
+            <span class="choice-desc">定义有效输入域、禁止行为、非法输入应有行为与假设；批准后才会启动修复。</span>
+            <span class="choice-meta">修改任意字段会生成新 revision 并清除批准</span>
+            <span class="choice-arrow">进入填写 →</span>
+          </button>
+        </div>
+
+        <svg class="doodle-bug" viewBox="0 0 240 150" aria-hidden="true">
+          <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="28" y="96" width="92" height="16" rx="3" transform="rotate(-4 74 104)"/>
+            <rect x="40" y="80" width="96" height="16" rx="3" transform="rotate(2 88 88)"/>
+            <rect x="56" y="62" width="100" height="18" rx="3" transform="rotate(-3 106 71)"/>
+            <ellipse cx="132" cy="46" rx="22" ry="16" transform="rotate(-12 132 46)"/>
+            <path d="M118 34 C108 24 100 22 92 24"/>
+            <path d="M146 34 C156 24 164 22 172 24"/>
+            <path d="M112 46 C100 44 92 48 86 54"/>
+            <path d="M114 56 C104 58 98 64 96 72"/>
+            <path d="M150 48 C160 48 168 54 172 60"/>
+            <path d="M148 58 C158 62 164 68 166 76"/>
+            <path d="M122 28 C126 20 132 16 140 16"/>
+            <circle cx="140" cy="14" r="2.2" fill="currentColor" stroke="none"/>
+          </g>
+        </svg>
+
+        <section class="paper-next">
+          <h2 class="paper-h2">两步之后</h2>
+          <ol class="paper-list">
+            <li><strong>登记任务</strong>：样本哈希与契约一起冻结为任务输入。</li>
+            <li><strong>复核批准</strong>：在进度页批准当前契约，才能启动修复。</li>
+            <li><strong>证据与导出</strong>：V0–V5 义务、产物哈希与 JSON 证据包。</li>
+          </ol>
+        </section>
+      </div>
+
+      <form class="wizard-form" method="post" action="/jobs" enctype="multipart/form-data" data-testid="setup-form">
+        <input type="hidden" name="csrf" value="{{ csrf_token }}">
+
+        <div class="wizard-view is-hidden" data-view="input">
+          <div class="paper-tabs" role="tablist" aria-label="步骤">
+            <button type="button" class="paper-tab is-active" data-goto="input" role="tab" aria-selected="true">01 · 样本与输入</button>
+            <button type="button" class="paper-tab" data-goto="contract" role="tab" aria-selected="false">02 · 安全契约</button>
+          </div>
+
+          <section class="paper-card">
+            <div class="paper-card-head">
+              <h2 class="paper-h2">样本与输入</h2>
+              <span class="paper-note">Sample &amp; inputs</span>
+            </div>
+
+            <label class="field">
+              <span class="label">二进制样本（Linux x86-64 ELF）<em>必填</em></span>
+              <input type="file" name="binary" required data-testid="binary-input">
+              <small>演示模式只计算 SHA-256，不解析、不执行；文件名会转成 ASCII 安全名。</small>
+            </label>
+
+            <label class="field">
+              <span class="label">缺陷描述（英文）</span>
+              <textarea name="defect" rows="3" placeholder="e.g. strcpy in stack_buf does not check length; overlong input writes out of bounds" data-testid="defect-input"></textarea>
+            </label>
+
+            <div class="field-grid">
+              <label class="field">
+                <span class="label">复现输入 / 有效输入测试（英文，每行一条）</span>
+                <textarea name="valid_tests" rows="4" placeholder="valid: hello&#10;boundary: 8 bytes&#10;invalid: 64 bytes" data-testid="tests-input"></textarea>
+              </label>
+              <label class="field">
+                <span class="label">执行环境（英文）</span>
+                <input type="text" name="environment" placeholder="Ubuntu x86-64 VM (execution disabled in demo)" data-testid="env-input">
+              </label>
+            </div>
+          </section>
+
+          <p class="wizard-error is-hidden" data-wizard-error role="alert"></p>
+
+          <div class="wizard-nav">
+            <button type="button" class="btn ghost" data-back="home" data-testid="wizard-back">← 返回选择</button>
+            <button type="button" class="btn primary" data-testid="wizard-next">下一步：安全契约 →</button>
+          </div>
+        </div>
+
+        <div class="wizard-view is-hidden" data-view="contract">
+          <div class="paper-tabs" role="tablist" aria-label="步骤">
+            <button type="button" class="paper-tab" data-goto="input" role="tab" aria-selected="false">01 · 样本与输入</button>
+            <button type="button" class="paper-tab is-active" data-goto="contract" role="tab" aria-selected="true">02 · 安全契约</button>
+          </div>
+
+          <section class="paper-card">
+            <div class="paper-card-head">
+              <h2 class="paper-h2">安全契约</h2>
+              <span class="paper-note">Contract · editable</span>
+            </div>
+            <p class="paper-note">复核者会在这里确认安全契约；批准后才会启动修复。修改任意字段会生成新 revision 并清除批准。</p>
+
+            <div class="field-grid">
+              <label class="field">
+                <span class="label">有效输入域 Valid domain</span>
+                <input type="text" name="valid_domain" value="Input length 0-64 bytes; out-of-range lengths rejected" data-testid="contract-domain">
+              </label>
+              <label class="field">
+                <span class="label">禁止行为 Forbidden behavior</span>
+                <input type="text" name="forbidden" value="Out-of-bounds write to the target buffer (more than 8 bytes)" data-testid="contract-forbidden">
+              </label>
+            </div>
+
+            <label class="field">
+              <span class="label">非法输入应有行为 Required invalid-input outcome</span>
+              <input type="text" name="invalid_outcome" value="Return error code 1 without out-of-bounds access or crash" data-testid="contract-invalid">
+            </label>
+
+            <label class="field">
+              <span class="label">假设 Assumptions（英文，每行一条）</span>
+              <textarea name="assumptions" rows="3" data-testid="contract-assumptions">Single process
+Linux x86-64 ELF
+Stack protector disabled</textarea>
+            </label>
+          </section>
+
+          <p class="wizard-error is-hidden" data-wizard-error role="alert"></p>
+
+          <div class="wizard-nav">
+            <button type="button" class="btn ghost" data-back="input" data-testid="wizard-back-contract">← 上一步</button>
+            <button type="submit" class="btn primary" data-testid="create-job">登记任务并进入复核</button>
+          </div>
+          <p class="paper-note">提交后进入任务页；契约仍需复核者批准后才能启动修复。</p>
+        </div>
+      </form>
+    </div>
+
+    <p class="paper-foot">阶段与结论是两条独立的轴 · 未执行显示 not_run · 导出不代表生产批准</p>
+  </main>
+
+  <script src="/static/js/setup-wizard.js" defer></script>
+</body>
+</html>

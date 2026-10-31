@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}BinaryRepair{% endblock %} · BinaryRepair</title>
+  <link rel="stylesheet" href="/static/css/app.css?v=20261022b">
+</head>
+<body data-job-id="{{ job.id if job else '' }}" data-demo="{{ '1' if demo else '0' }}">
+  <div class="app-bg" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <a class="brand" href="/">
+      <span class="brand-mark" aria-hidden="true">BR</span>
+      <span class="brand-text">
+        <strong>BinaryRepair</strong>
+        <small>AI 二进制漏洞修复 · 证据工作台</small>
+      </span>
+    </a>
+    <nav class="topnav" aria-label="主导航">
+      <a href="/jobs/new" class="topnav-link">新建任务</a>
+      <span class="env-chip"><span class="env-dot" aria-hidden="true"></span> LOCAL · 127.0.0.1</span>
+    </nav>
+  </header>
+
+  {% if demo %}
+  <div class="demo-banner" role="status">
+    <strong>演示数据</strong>：页面使用合成 fixture，<strong>未执行真实修复</strong>，不能作为"补丁已验证"的证据。
+  </div>
+  {% endif %}
+
+  <main class="wrap">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="footer">
+    <span>阶段与结论是两条独立的轴 · 未执行显示 <code>not_run</code> · 两条路线都成功才算整体成功 · 导出不代表生产批准</span>
+  </footer>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>

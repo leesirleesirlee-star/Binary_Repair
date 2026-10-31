@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "original_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "contract_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "analysis_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "route": "route_a",
+  "target_entry": "copy_name",
+  "evidence_ids": [
+    "ev_bytes_2"
+  ],
+  "template_id": "guard_capacity",
+  "parameters": {
+    "capacity": 16,
+    "error_return": -1
+  },
+  "recovered_function_sha256": null,
+  "replacement_c": null,
+  "expected_effects": [
+    "inputs of 16 bytes or more return -1 before any write"
+  ],
+  "assumptions": [
+    "capacity 16 is the reviewed destination size"
+  ],
+  "uncertainties": []
+}

@@ -1,0 +1,282 @@
+{% extends "base.html" %}
+{% block title %}进度与对比{% endblock %}
+
+{% block content %}
+<section class="job-head">
+  <div class="job-head-main">
+    <h1>{{ job.filename }}</h1>
+    <p class="hash">SHA-256 <code data-testid="original-sha256">{{ job.original_sha256 }}</code></p>
+    <p class="meta">
+      任务 <code>{{ job.id }}</code> ·
+      契约 r{{ job.contract.revision }} <code>{{ job.contract.sha256[:16] }}…</code> ·
+      创建于 {{ job.created_at }} ·
+      环境 {{ job.environment }}
+    </p>
+  </div>
+  <div class="head-actions">
+    {% if job.phase == "draft" %}
+      {% if not can_start %}
+      <span class="hint" data-testid="start-unavailable">当前数据来源只登记任务，尚未提供修复执行接口。</span>
+      {% elif not job.contract.approved %}
+      <span class="hint" data-testid="start-needs-approval">契约尚未批准，请先批准当前契约再启动。</span>
+      {% else %}
+      <form method="post" action="/jobs/{{ job.id }}/start">
+        <input type="hidden" name="csrf" value="{{ csrf_token }}">
+        <button class="btn primary" type="submit" data-testid="start-run">批准并启动</button>
+      </form>
+      {% endif %}
+    {% elif job.phase != "finished" %}
+    <form method="post" action="/jobs/{{ job.id }}/cancel">
+      <input type="hidden" name="csrf" value="{{ csrf_token }}">
+      <button class="btn ghost" type="submit" data-testid="cancel-run">取消</button>
+    </form>
+    {% endif %}
+    <a class="btn ghost" href="/jobs/{{ job.id }}/evidence" data-testid="open-evidence">查看证据</a>
+  </div>
+</section>
+
+{% if error %}
+<p class="diagnostic" data-testid="job-error">{{ error }}</p>
+{% endif %}
+
+<div class="statusbar">
+  <span class="status-item">任务阶段：<span class="badge" id="job-phase" data-testid="job-phase">{{ phase_labels_zh.get(job.phase, job.phase) }}</span></span>
+  <span class="status-item">整体结论：
+    {% set overall = display_verdict(job) %}
+    <span class="badge outcome-{{ overall.key | replace('_', '-') }}" id="job-outcome" data-testid="job-outcome">{{ overall.label_zh }}</span>
+  </span>
+  <span class="status-item muted">每 2 秒自动刷新 · 未执行 = not_run · <span id="poll-status">轮询中…</span></span>
+</div>
+
+{% if job.run or (job.verdict and job.verdict.outcome) %}
+<div class="run-strip" data-testid="run-strip">
+  {% if job.run %}
+  <span class="run-item">run <code>{{ job.run.id }}</code> · 阶段 <span id="run-phase">{{ phase_labels_zh.get(job.run.phase, job.run.phase) }}</span></span>
+  {% endif %}
+  <span class="run-item">
+    Verdict：
+    {% if job.verdict and job.verdict.outcome %}
+    <span class="badge outcome-{{ job.verdict.outcome | replace('_', '-') }}" data-testid="run-verdict">{{ outcome_labels_zh.get(job.verdict.outcome, job.verdict.outcome) }}</span>
+    {% if job.verdict.failing_obligation %}<span class="muted" data-testid="run-failing">失败义务 {{ job.verdict.failing_obligation }}</span>{% endif %}
+    {% if job.verdict.detail %}<span class="muted">{{ job.verdict.detail }}</span>{% endif %}
+    {% else %}<span class="muted" data-testid="run-verdict">尚无 verdict</span>{% endif %}
+  </span>
+</div>
+{% endif %}
+
+<div class="contract-strip">
+  <details>
+    <summary>
+      安全契约（r{{ job.contract.revision }} ·
+      {% if job.contract.approved %}
+      <span class="badge outcome-success-within-scope" data-testid="contract-approval">已批准</span>
+      {% else %}
+      <span class="badge outcome-inconclusive" data-testid="contract-approval">待批准</span>
+      {% endif %}
+      · sha256 {{ job.contract.sha256[:16] }}…）
+    </summary>
+    <dl class="facts">
+      <div><dt>有效输入域</dt><dd>{{ job.contract.valid_domain }}</dd></div>
+      <div><dt>禁止行为</dt><dd>{{ job.contract.forbidden }}</dd></div>
+      <div><dt>非法输入应有行为</dt><dd>{{ job.contract.invalid_outcome }}</dd></div>
+      <div><dt>假设</dt><dd>{{ job.contract.assumptions | join("; ") }}</dd></div>
+    </dl>
+
+    <form class="card form" method="post" action="/jobs/{{ job.id }}/contract" data-testid="contract-form">
+      <input type="hidden" name="csrf" value="{{ csrf_token }}">
+      <h3>更新契约（会生成新 revision 并清除批准）</h3>
+      <input type="hidden" name="expected_revision" value="{{ job.contract.revision }}">
+      <label class="field">
+        <span class="label">有效输入域 Valid domain</span>
+        <input type="text" name="valid_domain" value="{{ job.contract.valid_domain }}" data-testid="edit-contract-domain">
+      </label>
+      <label class="field">
+        <span class="label">禁止行为 Forbidden behavior</span>
+        <input type="text" name="forbidden" value="{{ job.contract.forbidden }}" data-testid="edit-contract-forbidden">
+      </label>
+      <label class="field">
+        <span class="label">非法输入应有行为 Required invalid-input outcome</span>
+        <input type="text" name="invalid_outcome" value="{{ job.contract.invalid_outcome }}" data-testid="edit-contract-invalid">
+      </label>
+      <label class="field">
+        <span class="label">假设 Assumptions（每行一条）</span>
+        <textarea name="assumptions" rows="3" data-testid="edit-contract-assumptions">{{ job.contract.assumptions | join("\n") }}</textarea>
+      </label>
+      <button class="btn ghost" type="submit" data-testid="save-contract">保存契约（新 revision）</button>
+    </form>
+
+    <form class="card form" method="post" action="/jobs/{{ job.id }}/approve" data-testid="approve-form">
+      <input type="hidden" name="csrf" value="{{ csrf_token }}">
+      <h3>批准当前契约（复核者确认）</h3>
+      <input type="hidden" name="expected_sha256" value="{{ job.contract.sha256 }}">
+      <label class="field">
+        <span class="label">复核者 Reviewer</span>
+        <input type="text" name="reviewer_label" placeholder="reviewer" data-testid="reviewer-input">
+      </label>
+      <button class="btn primary" type="submit" data-testid="approve-contract">批准当前契约</button>
+    </form>
+  </details>
+</div>
+
+{% if visuals and visuals.available %}
+<section class="code-view" data-testid="code-view">
+  <h2>漏洞与修复视图（交互演示）</h2>
+  <p class="muted">{{ visuals.note }}</p>
+  <div class="code-grid">
+  {% for key, view in visuals.routes.items() %}
+    <article class="code-card" data-code-route="{{ key }}" data-mode="{{ view.mode }}">
+      <header class="code-head">
+        <h3>{{ route_names_zh.get(key, view.name) }}</h3>
+        <span class="muted">{{ view.function }} · <code>{{ view.range }}</code></span>
+      </header>
+      <p class="vuln-callout">漏洞位置 <code>{{ view.vulnerable.addr }}</code>：{{ view.vulnerable.reason }}<br><span class="muted">{{ view.vulnerable.contract }}</span></p>
+
+      <div class="code-tabs" role="tablist">
+        <button type="button" class="code-tab is-active" data-view="original">原始代码</button>
+        <button type="button" class="code-tab" data-view="repaired">修复后代码</button>
+        <button type="button" class="code-tab" data-view="diff">差异</button>
+        <button type="button" class="code-tab" data-view="candidate">AI 候选</button>
+      </div>
+
+      <div class="code-panel" data-panel="original">
+        <ol class="code-lines">
+        {% for line in view.original %}
+          <li class="code-line {% if line.tag %}is-{{ line.tag }}{% endif %}" {% if line.detail %}data-detail="{{ line.detail }}" tabindex="0"{% endif %}>
+            {% if view.mode == 'c' %}<span class="code-no">{{ line.line }}</span>{% else %}<span class="code-addr">{{ line.addr }}</span><span class="code-bytes">{{ line.bytes }}</span>{% endif %}
+            <span class="code-text">{{ line.text }}</span>
+          </li>
+        {% endfor %}
+        </ol>
+      </div>
+
+      <div class="code-panel is-hidden" data-panel="repaired">
+        <ol class="code-lines">
+        {% for line in view.repaired %}
+          <li class="code-line {% if line.tag %}is-{{ line.tag }}{% endif %}" {% if line.detail %}data-detail="{{ line.detail }}" tabindex="0"{% endif %}>
+            {% if view.mode == 'c' %}<span class="code-no">{{ line.line }}</span>{% else %}<span class="code-addr">{{ line.addr }}</span><span class="code-bytes">{{ line.bytes }}</span>{% endif %}
+            <span class="code-text">{{ line.text }}</span>
+          </li>
+        {% endfor %}
+        </ol>
+      </div>
+
+      <div class="code-panel is-hidden" data-panel="diff">
+        <ol class="code-lines">
+        {% for line in view.diff %}
+          <li class="code-line is-{{ line.status }}" {% if line.detail %}data-detail="{{ line.detail }}" tabindex="0"{% endif %}>
+            <span class="code-no">{{ line.addr or line.line or '' }}</span>
+            <span class="code-text">{{ line.text }}</span>
+          </li>
+        {% endfor %}
+        </ol>
+      </div>
+
+      <div class="code-panel is-hidden" data-panel="candidate">
+        <dl class="facts">
+          <div><dt>模板</dt><dd><code>{{ view.candidate.template_id }}</code></dd></div>
+          <div><dt>模型</dt><dd>{{ view.candidate.model }}</dd></div>
+          <div><dt>尝试次数</dt><dd>{{ view.candidate.attempts }}</dd></div>
+          <div><dt>AI 用量</dt><dd>{{ view.candidate.ai_usage }}</dd></div>
+          <div><dt>理由</dt><dd>{{ view.candidate.rationale }}</dd></div>
+          <div><dt>假设</dt><dd>{{ view.candidate.assumptions | join("；") }}</dd></div>
+          <div><dt>不确定性</dt><dd>{{ view.candidate.uncertainties | join("；") }}</dd></div>
+        </dl>
+        <p class="muted">AI 只负责提出候选；是否通过由确定性检查决定，界面不提供“跳过检查”的操作。</p>
+      </div>
+
+      <div class="code-detail" data-testid="code-detail-{{ key }}">点击高亮行查看漏洞/改动详情</div>
+    </article>
+  {% endfor %}
+  </div>
+</section>
+{% elif visuals %}
+<p class="limits" data-testid="code-view-unavailable">代码视图不可用：{{ visuals.note }}</p>
+{% endif %}
+
+<div class="routes">
+  {% for key, route in job.routes.items() %}
+  <article class="route-card" data-route="{{ key }}" data-testid="route-{{ key }}">
+    <header class="route-head">
+      <h2>{{ route_names_zh.get(key, route.name) }}</h2>
+      <span class="badge {% if route.outcome %}outcome-{{ route.outcome | replace('_', '-') }}{% else %}outcome-none{% endif %}" id="outcome-{{ key }}" data-testid="outcome-{{ key }}">
+        {{ outcome_labels_zh.get(route.outcome) or "尚无结论" }}
+      </span>
+    </header>
+
+    <p class="route-phase">阶段：<span id="phase-{{ key }}">{{ phase_labels_zh.get(route.phase, route.phase) }}</span></p>
+
+    <p class="verdict is-empty" id="verdict-{{ key }}" data-testid="route-verdict-{{ key }}">
+      {% if route.verdict and route.verdict.outcome %}
+      Verdict：{{ outcome_labels_zh.get(route.verdict.outcome, route.verdict.outcome) }}
+      {% if route.verdict.reason %} · {{ route.verdict.reason }}{% endif %}
+      {% if route.verdict.failing_obligation %} · 失败义务 {{ route.verdict.failing_obligation }}{% endif %}
+      {% if route.verdict.detail %} · {{ route.verdict.detail }}{% endif %}
+      {% else %}Verdict：—{% endif %}
+    </p>
+
+    <div class="obligation-strip" id="obligations-{{ key }}" data-testid="route-obligations-{{ key }}">
+      {% if route.obligations %}
+      <span class="obligation-title">V0–V5 义务</span>
+      <ul class="obligation-list">
+        {% for item in order_obligations(route.obligations) %}
+        <li>
+          <span class="result result-{{ item.result }}">{{ item.result }}</span>
+          <code>{{ item.id or item.kind }}</code>
+          {% if item.id and item.kind %}{{ item.kind }}{% endif %}
+          {% if item.reason or item.detail %} · {{ item.reason or item.detail }}{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+
+    <ol class="stages" id="stages-{{ key }}">
+      {% for stage in route.stages %}
+      <li class="stage stage-{{ stage.state }}" data-stage="{{ stage.name }}" data-testid="stage-{{ key }}-{{ stage.name }}">
+        <span class="dot"></span>
+        <span class="stage-name">{{ stage_labels_zh.get(stage.name, stage.name) }}</span>
+        <span class="stage-state">{{ state_labels_zh.get(stage.state, stage.state) }}</span>
+      </li>
+      {% endfor %}
+    </ol>
+
+    <dl class="facts">
+      <div><dt>有效输入测试</dt><dd id="tests-{{ key }}">{{ route.tests.passed }}/{{ route.tests.total }}</dd></div>
+      <div><dt>有界验证</dt><dd id="verification-{{ key }}">{{ value_labels_zh.get(route.verification, route.verification) }}</dd></div>
+      <div><dt>兼容性</dt><dd id="compatibility-{{ key }}">{{ value_labels_zh.get(route.compatibility, route.compatibility) }}</dd></div>
+      <div><dt>耗时</dt><dd id="elapsed-{{ key }}">{{ route.elapsed_s }} s</dd></div>
+      <div><dt>人工介入</dt><dd id="manual-{{ key }}">{{ route.manual_interventions }} 次</dd></div>
+      <div><dt>AI 用量</dt><dd id="ai-{{ key }}">{{ route.ai_usage }}</dd></div>
+    </dl>
+
+    <p class="reason" id="reason-{{ key }}">{% if route.outcome_reason %}结论原因：{{ route.outcome_reason }}{% endif %}</p>
+
+    <details class="regions">
+      <summary>改动 / 新增区域</summary>
+      <table>
+        <thead><tr><th>地址</th><th>类型</th><th>修改前</th><th>修改后</th></tr></thead>
+        <tbody id="regions-{{ key }}">
+          {% for region in route.changed_regions %}
+          <tr><td><code>{{ region.address }}</code></td><td>{{ region.kind }}</td><td><code>{{ region.before }}</code></td><td><code>{{ region.after }}</code></td></tr>
+          {% else %}
+          <tr><td colspan="4" class="muted">尚未产生改动（或未执行）</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </details>
+  </article>
+  {% endfor %}
+</div>
+
+<p class="limits">
+  限制：本页数据是演示 fixture，阶段推进与结论均为预设；真实结果来自 VM 内执行与验收引擎。
+  "更小的补丁"不等于"更安全"，两条路线需各自成功才算整体成功。
+  数据字段为英文（符合语言规范），界面文案为中文。
+  <br>数据来源：{{ backend_note }}
+</p>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/poll.js" defer></script>
+<script src="/static/js/codeview.js" defer></script>
+{% endblock %}

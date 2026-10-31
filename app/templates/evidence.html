@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}证据与导出{% endblock %}
+
+{% block content %}
+<section class="job-head">
+  <div class="job-head-main">
+    <h1>③ 证据与导出</h1>
+    <p class="hash">SHA-256 <code data-testid="original-sha256">{{ job.original_sha256 }}</code></p>
+    <p class="meta">任务 <code>{{ job.id }}</code> · 契约 r{{ job.contract.revision }} <code>{{ job.contract.sha256[:16] }}…</code> · 创建于 {{ job.created_at }}</p>
+  </div>
+  <div class="head-actions">
+    <a class="btn ghost" href="/jobs/{{ job.id }}">返回对比</a>
+    <a class="btn primary" href="/api/jobs/{{ job.id }}/export" data-testid="export-evidence">下载 JSON</a>
+    <a class="btn ghost" href="/jobs/{{ job.id }}/report" target="_blank" rel="noopener" data-testid="view-report">查看 HTML 报告</a>
+    <a class="btn ghost" href="/jobs/{{ job.id }}/report?download=1" data-testid="download-report">下载 HTML</a>
+  </div>
+</section>
+
+<p class="limits">
+  导出不代表生产批准。失败或不确定的产物必须标为 <strong>diagnostic candidate</strong>，不能显示为成功。
+  哈希只证明身份，不证明正确性。符号验证是"有界"验证，不是整体程序安全证明。
+  证据内容为英文（符合语言规范），界面文案为中文。
+  <br>数据来源：{{ backend_note }}
+  {% if job.run %}· run <code>{{ job.run.id }}</code> · {{ job.run.phase }}{% endif %}
+  {% if job.verdict and job.verdict.outcome %}· verdict {{ job.verdict.outcome }}{% if job.verdict.failing_obligation %}（失败义务 {{ job.verdict.failing_obligation }}）{% endif %}{% endif %}
+</p>
+
+{% for key, route in job.routes.items() %}
+<article class="card evidence-card" data-testid="evidence-{{ key }}">
+  <header class="route-head">
+    <h2>{{ route_names_zh.get(key, route.name) }}</h2>
+    <span class="badge {% if route.outcome %}outcome-{{ route.outcome | replace('_', '-') }}{% else %}outcome-none{% endif %}" data-testid="evidence-outcome-{{ key }}">
+      {{ outcome_labels_zh.get(route.outcome) or "尚无结论" }}
+    </span>
+  </header>
+
+  {% if route.outcome and route.outcome != "success_within_scope" %}
+  <p class="diagnostic">诊断候选（diagnostic candidate）：本产物未通过全部必需检查，只能用于诊断与复盘，不能作为修复结果。</p>
+  {% endif %}
+  {% if route.outcome_reason %}
+  <p class="reason">结论原因：{{ route.outcome_reason }}</p>
+  {% endif %}
+  {% if route.verdict and route.verdict.outcome %}
+  <p class="verdict" data-testid="evidence-verdict-{{ key }}">
+    Verdict：{{ outcome_labels_zh.get(route.verdict.outcome, route.verdict.outcome) }}
+    {% if route.verdict.reason %} · reason: {{ route.verdict.reason }}{% endif %}
+    {% if route.verdict.failing_obligation %} · 失败义务: {{ route.verdict.failing_obligation }}{% endif %}
+    {% if route.verdict.detail %} · {{ route.verdict.detail }}{% endif %}
+  </p>
+  {% endif %}
+
+  <h3>验证义务（V0–V5）</h3>
+  <table class="obligations">
+    <thead>
+      <tr><th>编号</th><th>类别</th><th>要求</th><th>结果</th><th>范围 / 依据</th><th>说明</th></tr>
+    </thead>
+    <tbody>
+      {% for item in order_obligations(obligations[key]) %}
+      <tr>
+        <td><code>{{ item.id or item.kind }}</code></td>
+        <td>{{ item.kind }}</td>
+        <td>{{ item.description or "" }}</td>
+        <td><span class="result result-{{ item.result }}">{{ item.result }}</span></td>
+        <td>{{ item.scope or item.evidence_artifact_id or "" }}</td>
+        <td>{{ item.reason or item.detail or "" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h3>测试与范围</h3>
+  <dl class="facts">
+    <div><dt>有效输入测试</dt><dd>{{ route.tests.passed }}/{{ route.tests.total }}</dd></div>
+    <div><dt>有界验证</dt><dd>{{ value_labels_zh.get(route.verification, route.verification) }}</dd></div>
+    <div><dt>兼容性</dt><dd>{{ value_labels_zh.get(route.compatibility, route.compatibility) }}</dd></div>
+    <div><dt>耗时</dt><dd>{{ route.elapsed_s }} s</dd></div>
+    <div><dt>人工介入</dt><dd>{{ route.manual_interventions }} 次</dd></div>
+    <div><dt>AI 用量</dt><dd>{{ route.ai_usage }}</dd></div>
+  </dl>
+
+  <h3>产物</h3>
+  <ul class="artifacts">
+    {% for art in artifacts[key] %}
+    <li>
+      <code>{{ art.name }}</code>
+      <span class="muted">{{ art.role }}</span>
+      <span class="hash-mini">sha256 {{ art.sha256[:16] }}…</span>
+      {% if art.id and art.available %}
+      <a href="/api/artifacts/{{ art.id }}/download" data-testid="artifact-download-{{ key }}-{{ loop.index }}">下载</a>
+      {% else %}
+      <span class="muted" data-testid="artifact-not-available-{{ key }}-{{ loop.index }}">not_available（{{ art.sha256[:16] }}…）</span>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+
+  <details class="regions">
+    <summary>改动 / 新增区域</summary>
+    <table>
+      <thead><tr><th>地址</th><th>类型</th><th>修改前</th><th>修改后</th></tr></thead>
+      <tbody>
+        {% for region in route.changed_regions %}
+        <tr><td><code>{{ region.address }}</code></td><td>{{ region.kind }}</td><td><code>{{ region.before }}</code></td><td><code>{{ region.after }}</code></td></tr>
+        {% else %}
+        <tr><td colspan="4" class="muted">无（未执行或未通过前置检查）</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+</article>
+{% endfor %}
+
+<div class="card note">
+  <h2>复现说明（replay）</h2>
+  <p>独立队友应按下列顺序复核：① 校验原始哈希与契约 revision；② 校验候选哈希与 edit manifest；
+  ③ 用冻结的测试清单重跑行为检查；④ 重跑有界符号检查并核对范围/假设；⑤ 对照义务表确认没有
+  <code>not_run</code> / 未解决义务被当作通过。演示版不产生真实文件，因此这一步当前只展示结构。</p>
+  <p class="muted">工具版本、命令参数、solver/exploration 记录等字段在接入真实链路后补充。</p>
+</div>
+{% endblock %}

@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "original_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "contract_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "analysis_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "route": "route_b",
+  "target_entry": "copy_name",
+  "evidence_ids": [
+    "ev_ghidra_export"
+  ],
+  "template_id": null,
+  "parameters": null,
+  "recovered_function_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "replacement_c": "int copy_name(char *dst, const char *src, unsigned int n)\n{\n    unsigned int i;\n    if (n >= 16u) {\n        return -1;\n    }\n    for (i = 0; i < n; i++) {\n        dst[i] = src[i];\n    }\n    dst[i] = '\\0';\n    return (int)i;\n}\n",
+  "expected_effects": [
+    "inputs of 16 bytes or more return -1 before any write"
+  ],
+  "assumptions": [
+    "int and unsigned int are 32-bit on the target ABI"
+  ],
+  "uncertainties": [
+    "recovered loop shape may differ from the original source"
+  ]
+}

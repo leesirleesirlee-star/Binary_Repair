@@ -1,0 +1,194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://binaryrepair.local/schemas/context.v1.json",
+  "$defs": {
+    "TemplateParam": {
+      "additionalProperties": false,
+      "properties": {
+        "min_value": {
+          "title": "Min Value",
+          "type": "integer",
+          "description": "Inclusive lower bound."
+        },
+        "max_value": {
+          "title": "Max Value",
+          "type": "integer",
+          "description": "Inclusive upper bound."
+        }
+      },
+      "required": [
+        "min_value",
+        "max_value"
+      ],
+      "title": "TemplateParam",
+      "type": "object"
+    },
+    "TemplateSpec": {
+      "additionalProperties": false,
+      "description": "A reviewed, deterministic repair template. The model may only parameterize it.",
+      "properties": {
+        "template_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Template Id",
+          "type": "string",
+          "description": "Stable identifier used by the deterministic builder."
+        },
+        "description": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string",
+          "description": "What the template does, in one sentence."
+        },
+        "parameters": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TemplateParam"
+          },
+          "title": "Parameters",
+          "type": "object",
+          "description": "Parameters the model must supply, with inclusive integer ranges."
+        }
+      },
+      "required": [
+        "template_id",
+        "description"
+      ],
+      "title": "TemplateSpec",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Everything the trusted host is willing to send for one candidate request.",
+  "properties": {
+    "route": {
+      "enum": [
+        "route_a",
+        "route_b"
+      ],
+      "title": "Route",
+      "type": "string",
+      "description": "Which route this request is for; the model cannot change it."
+    },
+    "original_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Original Sha256",
+      "type": "string",
+      "description": "Identity of the frozen input binary."
+    },
+    "contract_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Contract Sha256",
+      "type": "string",
+      "description": "Identity of the reviewed contract."
+    },
+    "analysis_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Analysis Sha256",
+      "type": "string",
+      "description": "Identity of the approved analysis bundle."
+    },
+    "target_entry": {
+      "pattern": "^(?:[A-Za-z_][A-Za-z0-9_@.$]*|0x[0-9a-fA-F]{1,16})$",
+      "title": "Target Entry",
+      "type": "string",
+      "description": "The only function the candidate may target."
+    },
+    "target_signature": {
+      "anyOf": [
+        {
+          "maxLength": 300,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Target Signature",
+      "description": "Recovered C signature, for interface compatibility."
+    },
+    "contract_summary": {
+      "maxLength": 4000,
+      "minLength": 1,
+      "title": "Contract Summary",
+      "type": "string",
+      "description": "Reviewed contract excerpt. The only authority on scope."
+    },
+    "allowed_evidence_ids": {
+      "items": {
+        "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
+        "type": "string"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "title": "Allowed Evidence Ids",
+      "type": "array",
+      "description": "Closed set of evidence ids the model may cite."
+    },
+    "templates": {
+      "items": {
+        "$ref": "#/$defs/TemplateSpec"
+      },
+      "maxItems": 8,
+      "title": "Templates",
+      "type": "array",
+      "description": "Route A: closed list of reviewed templates and parameter ranges."
+    },
+    "recovered_function_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Recovered Function Sha256",
+      "description": "Route B: hash of recovered_c, echoed back by the model."
+    },
+    "recovered_c": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Recovered C",
+      "description": "Route B: recovered function source, treated as untrusted data."
+    },
+    "allowed_calls": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 32,
+      "title": "Allowed Calls",
+      "type": "array",
+      "description": "Route B: callees the replacement may use; everything else is scope violation."
+    },
+    "max_replacement_chars": {
+      "default": 8000,
+      "maximum": 20000,
+      "minimum": 200,
+      "title": "Max Replacement Chars",
+      "type": "integer",
+      "description": "Route B: maximum accepted replacement_c length."
+    }
+  },
+  "required": [
+    "route",
+    "original_sha256",
+    "contract_sha256",
+    "analysis_sha256",
+    "target_entry",
+    "contract_summary",
+    "allowed_evidence_ids"
+  ],
+  "title": "RepairContext",
+  "type": "object"
+}
