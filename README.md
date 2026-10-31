@@ -144,3 +144,7 @@ citing this repository. In short:
 ## License
 
 MIT — see [`LICENSE`](LICENSE).
+
+## Contributors
+
+See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the five-member team and GitHub handles.
