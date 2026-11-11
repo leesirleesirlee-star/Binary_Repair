@@ -1,0 +1,46 @@
+name: Publish approved v1.2.1
+on:
+  push:
+    branches:
+      - release/automation-v1.2.1-148d236
+    paths:
+      - .github/workflows/publish-approved-v1.2.1.yml
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Publish approved commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          target=148d236d46bbd514dbb48f0a0f506ef2a2143fcc
+          expected_main=94393403319a10acc00552a7ae62836699036518
+          expected_rc=f5346978b46622c6c582e13d7cf6330f72e638f3
+          expected_v120=82f3209d707a2d6be25e21c592997cffdfa84dd4
+          expected_v113=1c5cacac5f8ade756b090f896a30f4f9e4ce9635
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$expected_main"
+          test "$(git ls-remote origin refs/tags/v1.2.1-rc1 | cut -f1)" = "$expected_rc"
+          test "$(git ls-remote origin refs/tags/v1.2.0 | cut -f1)" = "$expected_v120"
+          test "$(git ls-remote origin refs/tags/v1.1.3 | cut -f1)" = "$expected_v113"
+          test -z "$(git ls-remote origin refs/tags/v1.2.1 refs/heads/v1.2.1-stable)"
+          printf '%s' 'IyB2MiBnaXQgYnVuZGxlCi1kN2QyMGY0ZmYyZjkyMGI1Y2ZlYzVlODFlM2M0Mzc3NTI5YTk4ODVhIGRvY3M6IGRpc2Nsb3NlIE4xMCBhbmQgY29ycmVjdCBOMTEKMTQ4ZDIzNmQ0NmJiZDUxNGRiYjQ4ZjBhMGY1MDZlZjJhMjE0M2ZjYyByZWZzL2hlYWRzL3ByZXAvdjEuMi4xLXN0YWJsZS1kb2NzCgpQQUNLAAAAAgAAAAiSFHictdBNbsMgEIbhPaeYfRXEj/mZKIpyhtwA8NBYsk0EOFJvX5R20Qt0+36jZzG9EoH0U1Iia4vWRq0xOodBoZU5anSkkqUY/UzsGSrtHWY3j/MpZ5VRiWhSpmTIS9Jp0s4ZhQG9N4GFoz9KhTutFBrBs9IQQl/KDpf6E09/4u1oVBvfy0jrF/9c+uOIPJXtCtLhpNEbY+FDeCHYqNvSO/2PzuaS2vmXJHhJrriE1kNcCcZ2bOMPb5V9A0LpaeT6A6p+3lBWCbYLQQfNVUYrHdXsZfxqeJwBOgDF/6ILoguwywEU36O6uWG+tQFONJgKeZdb+M7HSr2T3wHFFKqXOQMOqHI+FzVYJ9dtClAOIERPs7gC6gIKNhiK/Qcg1420QIOLPq7v/zGLv3y1vDuvQHicu6xxXGNDDZNQWGpRcWZ+ngIIlBnqGekZTp7NZG5blJqTmlicqg8RUnBQMDYxtDCxNFTQKM4vLUpOVUjMS1FIzi8qSk0uSU1RSMlPLs1NzStJLAGapTlZjvmeeEZmcUl+UWZyYg7EXAMFoNr8os3MLAECAOe3KJ7+AQYN3hRYaJWZPOxb7VOzrjQ0H0LVeJwBHgDh/+cC5wKQxhS7Du/Uf+7d05lri80oRLRy1DHR9JHajQWGEZb/Af/RXYM5/uAgjaSYm+qvcMR2sQ5leJwBHwDg//MC8wKQMhRgHb/gquTm52DTsfQ0pvKWEAVFqLFGLQEGHw+Z9QMfxQetE2klUdy5CpQ0zCh4SGYlb3icATUAyv+lFKUUsG4JFDiL/pqJhgqednXkeVXDHzOl95qWk4IJjxT/wgTVouQc5VUxH/8ynC9zcThXH5a8GFP0DRzbsQ/OiNmzqPhueSL3Z4dBAhz6eJwtjT0KwkAUhDHYmNYLTGchphG08AQWaiNYWK3ZF/Ngk427b/3pvIOXsBEEL2HvhdyIxcDAfHxz7316z2kyXK7WqKzmgkljd4GU7FHwOcNcUCqP2kLlwkdKb4ekf7sm3TZjAI2zOuSCXBmDRkkJVeuWd6EWrgi5PZJT+1iM4ip7PZJ3Z7sYDzwcHQK7+LjhWtuTT0W5PQl8TPyfTKPPe9KzVvdnUARjRj6w0G9twZ84akpylKVfErZJUfcFDzYheIyZkoVL4qTrs6I5cefTJVV4nJvGMoVlQwSju6Onj4JGQWJRSWZijo5CSn5ysW5+Xk6lpsKjhikKRkaWCuX5RSmZeekKyflFRanJJakpCkmlJQp5+QpFpXklmbmpCumliUUpkxcwak0+zegNACzvHypqAj60/AMALG7XFp+P6RcaraQNpw==' | base64 --decode > /tmp/v1.2.1-stable.bundle
+          echo 'c279ce826aeed1e02d074f0026642c0cb63810539627499013e0110e0dea6b3c  /tmp/v1.2.1-stable.bundle' | sha256sum -c -
+          git bundle verify /tmp/v1.2.1-stable.bundle
+          git fetch /tmp/v1.2.1-stable.bundle refs/heads/prep/v1.2.1-stable-docs:refs/heads/v1.2.1-stable
+          test "$(git rev-parse refs/heads/v1.2.1-stable)" = "$target"
+          git merge-base --is-ancestor "$expected_main" "$target"
+          git config user.name 'BinaryRepair release automation'
+          git config user.email 'release-preparation@users.noreply.github.com'
+          git push origin "$target:refs/heads/v1.2.1-stable"
+          git tag -a v1.2.1 -m 'BinaryRepair v1.2.1 stable' "$target"
+          git push origin refs/tags/v1.2.1
+          gh release create v1.2.1 --repo "$GITHUB_REPOSITORY" --title 'BinaryRepair v1.2.1' --notes 'Stable MVP release. N-10: custom key-file protection requires the adapter process to receive the same BINARYREPAIR_ASSISTANT_KEY_FILE environment setting. N-11 is a documentation correction; no runtime guard was added to route_bundle_ingest. Verification is scoped to the documented tests and models.'
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$expected_main"
+          git push origin "$target:refs/heads/main"
