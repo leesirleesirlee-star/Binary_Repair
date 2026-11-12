@@ -1,139 +1,43 @@
-# BinaryRepair
+# BinaryRepair Workbench · 组员预览版
 
-BinaryRepair is a local analyst tool for repairing one known vulnerability in a
-Linux x86-64 ELF **without original source**. Two independent repair routes
-produce candidate bytes, and one deterministic acceptance engine decides whether
-the final bytes are `success_within_scope`. A model explanation is never
-evidence.
+本地运行的 AI 二进制漏洞修复工作台。无需后端或数据库，启动后用浏览器打开。
 
-This is a curated public snapshot of the accepted project. The development
-history and historical evidence remain in the source repository
-[`chenfanaichifan/binary-repair`](https://github.com/chenfanaichifan/binary-repair).
+## 30 秒启动
 
-```text
-Repository  https://github.com/leesirleesirlee-star/Binary_Repair
-Version     v1.2.1
-Source      chenfanaichifan/binary-repair
-            release/v1.2.1 @ 3418491 (source and corrected documentation)
+### macOS / Linux
+```bash
+chmod +x start-gui.sh
+./start-gui.sh
 ```
-
-## Current status
-
-| Item | State |
-|---|---|
-| T8.3 | **COMPLETE** |
-| P1 | **success_within_scope** |
-| P2 | **ACCEPTANCE PASSED** |
-| Test suite | **730 collected / 728 passed / 2 Linux-only skipped / 0 failed** (historical v1.2.0 record, 2026-11-09) |
-| Browser e2e | **12 passed** (Chrome CDP) |
-| Upload gate | **64 MiB client check + HTTP-only controls** |
-| V4 | **passed at model scope** (not binary-level proof) |
-| 118 | **VERIFIED** (independent) |
-
-See [`docs/status/final-status.md`](docs/status/final-status.md) and
-[`docs/acceptance/LIMITATIONS.md`](docs/acceptance/LIMITATIONS.md) before citing
-this project as proof.
-
-## What it does
-
-- **Route A** redirects the vulnerable call into a reviewed code cave.
-- **Route B** recovers C, recompiles it, and re-integrates the function.
-- A shared engine checks V0–V5 on the final candidate and returns
-  `success_within_scope`, `inconclusive`, `rejected`, `unsupported`, `error`, or
-  `cancelled`.
-- The GUI/API only render verdicts; they never decide them.
-- The host never executes uploaded or repaired binaries. Parsing, compilation,
-  execution and symbolic analysis belong to the disposable guest under the
-  broker.
-
-## Repository layout
-
-```text
-app/                  FastAPI controller, services, domain, Jinja UI, static assets
-binaryrepair_ai/      provider adapter and typed AI boundary
-routea/               Route A components
-routeb/               Route B components
-workers/              guest executor and Route A worker
-tools/                ingestion, P2 acceptance, MCP adapters
-schemas/              protocol and evidence schemas
-scripts/              operator scripts
-tests/                unit, integration and browser e2e tests
-fixtures/             public fixtures
-artifacts/            canonical acceptance evidence
-docs/                 product, architecture, acceptance, operations, reviews
-```
-
-See [`docs/README.md`](docs/README.md) for the documentation map and
-[`docs/development/repository-layout.md`](docs/development/repository-layout.md)
-for a file-by-file guide.
-
-## Quick start
 
 ### Windows
+双击 `start-gui.bat`（或 `.\start-gui.ps1`）。
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\start.ps1
-```
+首次启动创建 `.venv`、安装依赖并生成本地 token；打开终端里带 `?token=` 的完整地址。
 
-### Linux
+## 这一版重点
 
-```bash
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt
-./start.sh
-```
+- **统一启动卡**：真实任务 / 演示会话 + 成功/失败场景，不再有两个割裂入口。
+- **结果与证据控制室**：证据总览、V0–V5 矩阵、义务筛选、Attempts、产物指纹、原始 JSON。
+- **只读评估**：`/api/jobs/{id}/evaluation` 输出覆盖率和缺口，不自行给出 verdict；缺失分母显示 N/A。
+- **九语界面**：简体中文、繁體中文、English、日本語、한국어、Français、Italiano、Português、Español；长页面文案也已本地化，技术标识/代码保留原文。
+- **克制的明暗双主题**：浅色为暖瓷白到冷灰的纸面、单层虹彩与极淡青绿，半透明玻璃卡片；深色为午夜青紫。不会用大面积橙/绿/蓝互相抢色。
+- **完整手册**：12 节、证据链图、步骤表、V0–V5、故障排查、安全边界、全球研究链接。
+- **响应式**：手机/窄窗口使用顶栏 + 抽屉侧栏。
+- **质量/效率报告**：`docs/acceptance/repair-evaluation-2026-11-12.md`。
 
-Open the printed `http://127.0.0.1:8123/?token=...` URL. Controller and worker
-are separate loopback-only processes; see the start scripts in the repository
-root.
+## 边界
 
-Run the test suite:
+- 演示模式使用合成 fixture，不执行真实修复，不构成「补丁已验证」。
+- 技术原文/证据标识保留原语言；不把机器翻译当作安全结论。
+- 真实 provider key 只保存在各自本机服务端；包内没有 key。
+- 插件清单只读；连接器“就绪”只代表本机具备条件。
 
-```bash
-python -m pytest -q
-```
+## 帮助
 
-The recorded acceptance environment is Linux with Chrome CDP for browser e2e.
-Windows hosts skip Linux-only cases and POSIX-fixture tests; use Linux for the
-full acceptance record.
+- `START-HERE.md`：第一次使用。
+- 启动后访问 `/guide`。
+- 端口冲突：`BINARYREPAIR_PORT=8124 ./start-gui.sh`。
+- 依赖失败：删除 `.venv` 后重试，确认 Python 3.10+。
 
-## Canonical evidence
-
-```text
-artifacts/p1-real-window-2026-11-07/           P1 job, snapshot, P2, V5 replay
-artifacts/p1-routea-v4-symbolic-2026-11-07/    Route A V4 marker
-artifacts/p1-routea-real-v4-2026-11-07/        Route A real V4 artifacts
-artifacts/p1-routea-v4-input-2026-11-07/       Route A V4 input package
-artifacts/v4-harness-2026-11-07/               V4 harness package
-artifacts/cwe416-124-v4-rerun-2026-11-06/      124 V0–V5 rerun evidence
-artifacts/m4/v4-2026-11-07/                    M4 V4 marker and five criteria
-artifacts/m4-revalidation-ebc92a8/             M4 revalidation
-artifacts/p1-v5-logs-2026-11-07/               original V5 replay logs
-```
-
-## Verification and limitations
-
-- **V4 is model-level.** It is a typed symbolic claim over the target function,
-  not a binary-level whole-program proof.
-- **M4 verifier and Lead approver are the same operator.** This is
-  role-separated, not independent two-person review.
-- **Review 9–12 original text is not recovered.** The verdict is against a
-  canonical reconstruction.
-- **Coverage is one public fixture family.** Other binaries, architectures,
-  compilers and stripped production binaries are not covered.
-- **No client binary, credential, private key or private log is included.**
-- **Not a production product.** This is an accepted course/MVP deliverable.
-
-## Contributing
-
-See [`CONTRIBUTING.md`](CONTRIBUTING.md), [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)
-and [`SECURITY.md`](SECURITY.md). Changes that touch acceptance evidence must
-keep `artifacts/**/SHA256SUMS` verifiable.
-
-## License and contributors
-
-See [`LICENSE`](LICENSE), [`CONTRIBUTORS.md`](CONTRIBUTORS.md) and
-[`CHANGELOG.md`](CHANGELOG.md).
+主仓库含测试、验收证据与开发文档；本包是体验用瘦身版。

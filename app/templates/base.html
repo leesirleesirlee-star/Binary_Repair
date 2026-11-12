@@ -3,26 +3,80 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  {% include "_theme_boot.html" %}
+  <meta name="csrf" content="{{ csrf_token }}">
+  {% include "_settings_boot.html" %}
+  <script>
+    (function () {
+      try {
+        if (window.localStorage.getItem("br.sidebar") === "collapsed") {
+          document.documentElement.classList.add("side-collapsed");
+        }
+      } catch (error) { /* ignore */ }
+    })();
+  </script>
   <title>{% block title %}BinaryRepair{% endblock %} · BinaryRepair</title>
-  <link rel="stylesheet" href="/static/css/ds.css?v=20261105a">
+  <link rel="stylesheet" href="/static/css/ds.css?v=20261113m">
   {% block head %}{% endblock %}
 </head>
 <body class="ds-body" data-job-id="{{ job.id if job else '' }}" data-demo="{{ '1' if demo else '0' }}">
+  <header class="ds-mobilebar">
+    <button class="ds-mobile-menu" id="ds-mobile-menu" type="button" aria-controls="ds-sidebar" aria-expanded="false" aria-label="打开菜单">☰</button>
+    <a class="ds-mobile-brand" href="/" aria-label="返回起始页"><span class="ds-brand-mark" aria-hidden="true"></span> BinaryRepair</a>
+    <a class="ds-mobile-new" href="/agent/new?new=1" aria-label="新建任务">＋</a>
+  </header>
+  <div class="ds-scrim" id="ds-scrim" hidden></div>
   <div class="ds-app">
-    <aside class="ds-sidebar">
-      <a class="ds-brand" href="/" aria-label="返回起始页" title="返回起始页">BinaryRepair <span class="ds-badge">预览版</span></a>
-      <a class="ds-new" href="/agent/new" data-testid="sidebar-new-task">＋ 新任务</a>
+    <aside class="ds-sidebar" id="ds-sidebar">
+      <button class="ds-sidebar-toggle" id="ds-sidebar-toggle" type="button"
+              aria-controls="ds-sidebar" aria-expanded="true" aria-label="收起侧栏" title="收起侧栏">‹</button>
+      <button class="ds-drawer-close" id="ds-drawer-close" type="button" aria-label="关闭菜单">×</button>
+      <a class="ds-brand" href="/" aria-label="返回起始页" title="返回起始页"><span class="ds-brand-mark" aria-hidden="true"></span>BinaryRepair <span class="ds-badge">预览版</span></a>
+      <a class="ds-new" href="/agent/new?new=1" data-testid="sidebar-new-task">＋ 新建任务</a>
+      <div class="ds-theme-row">
+        <span class="ds-theme-label">主题</span>
+        {% include "_theme_toggle.html" %}
+      </div>
 
+      <div class="ds-lang-row">
+        <span class="ds-theme-label">语言</span>
+        {% include "_lang_switch.html" %}
+      </div>
       <div class="ds-group">任务</div>
+      <div class="ds-job-search">
+        <input id="ds-job-search" type="search" placeholder="搜索任务…" aria-label="搜索本机任务">
+      </div>
       <nav class="ds-job-list" id="ds-job-list" data-testid="ds-job-list" aria-label="任务列表">
         <p class="ds-job-empty" data-testid="ds-job-empty">还没有本机任务记录。</p>
       </nav>
 
       <div class="ds-group">工作区</div>
-      <div class="ds-workspace">{% if workspace %}{{ workspace.label }}{% else %}本地工作区 · 127.0.0.1{% endif %}</div>
+      <div class="ds-workspace-switch" id="ds-workspace-switch">
+        {% set nav = (ui if ui is defined else nav_ui()) %}
+        <button type="button" class="ds-workspace" id="ds-workspace-button" aria-haspopup="true" aria-expanded="false">
+          {{ workspace.label if workspace is defined and workspace else "本地工作区" }} <span class="ds-workspace-caret" aria-hidden="true"></span>
+        </button>
+        <div class="ds-ws-menu" id="ds-workspace-menu" hidden>
+          {% for ws in nav.workspaces %}
+          <a href="/agent/new?new=1&amp;workspace={{ ws.id }}&amp;mode={{ mode.id if mode is defined else 'standard' }}"
+             class="{% if workspace is defined and ws.id == workspace.id %}is-active{% endif %}">
+            <strong>{{ ws.label }}</strong>
+            <span>{{ ws.detail }}</span>
+          </a>
+          {% endfor %}
+          <a href="/settings#settings-defaults" class="ds-ws-manage">更改默认工作区 →</a>
+        </div>
+      </div>
       <p class="ds-side-hint">
-        任务列表保存在本机浏览器，逐条向后端核对状态；服务端全量列表待 controller 提供。
+        任务列表保存在本机浏览器；任务与草稿对话已同步本机服务端。
       </p>
+
+      <div class="ds-group">扩展</div>
+      <a class="ds-side-link" href="/connectors" data-testid="sidebar-connectors">连接器与插件</a>
+      <a class="ds-side-link" href="/methods" data-testid="sidebar-methods">方法与工具</a>
+      <a class="ds-side-link" href="/guide" data-testid="sidebar-guide">使用说明</a>
+      <a class="ds-side-link" href="/settings" data-testid="sidebar-settings">设置</a>
+      <button class="ds-side-link ds-palette-open" type="button" data-palette-open>命令面板 <kbd>⌘K</kbd></button>
 
       <div class="ds-side-foot">
         阶段与结论是两条独立的轴。<br>
@@ -34,7 +88,9 @@
     <div class="ds-main">
       {% if demo %}
       <div class="ds-demo" role="status">
-        <strong>演示数据</strong>：页面使用合成 fixture，未执行真实修复，不能作为「补丁已验证」的证据。
+        <span class="ds-demo-tag">演示数据</span>
+        <span>合成 fixture · 未执行真实修复 · 不构成验收证据</span>
+        <a class="ds-demo-link" href="/guide#trouble">边界说明</a>
       </div>
       {% endif %}
 
@@ -45,8 +101,19 @@
       <footer class="ds-footer">BinaryRepair · AI 二进制漏洞修复与正确性验证工作台</footer>
     </div>
   </div>
+  {% include "_palette.html" %}
+  <button class="ds-sidebar-expand" id="ds-sidebar-expand" type="button"
+          aria-controls="ds-sidebar" aria-expanded="false" aria-label="展开侧栏" title="展开侧栏">›</button>
 
-  <script src="/static/js/jobs-list.js?v=20261105a"></script>
+  <script src="/static/js/settings.js?v=20261112a"></script>
+  <script src="/static/js/theme.js?v=20261111a"></script>
+  <script src="/static/js/shell.js?v=20261113b"></script>
+  <script src="/static/js/jobs-list.js?v=20261112b"></script>
+  <script src="/static/js/palette.js?v=20261112b"></script>
+  <script src="/static/js/i18n-data.js?v=20261113f"></script>
+  <script src="/static/js/i18n-auto.js?v=20261113d"></script>
+  <script src="/static/js/i18n.js?v=20261113h"></script>
+  <script src="/static/js/transitions.js?v=20261113a"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

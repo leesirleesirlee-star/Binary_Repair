@@ -1,0 +1,285 @@
+{% extends "base.html" %}
+
+{% block title %}使用说明{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/css/guide.css?v=20261113d">
+{% endblock %}
+
+{% block content %}
+<div class="guide" data-testid="guide-page">
+  <header class="guide-head">
+    <p class="guide-eyebrow">MANUAL / BINARYREPAIR</p>
+    <h1 class="ds-page-title">使用说明</h1>
+    <p class="ds-page-sub">
+      从第一次启动到证据导出：一份可照着操作、也能理解“为什么”的完整手册。
+      每一步都给出操作、预期结果和失败时该看哪里；技术结论与演示数据严格分开。
+    </p>
+    <div class="guide-meta">
+      <span>适用版本：本地预览版</span>
+      <span>界面中文 · 提交/导出 ASCII</span>
+      <a href="/settings">打开设置</a>
+      <a href="/methods">方法与工具</a>
+    </div>
+  </header>
+
+  <div class="guide-layout">
+    <nav class="guide-toc" aria-label="本页目录">
+      <p class="guide-toc-title">目录 / CONTENTS</p>
+      <a href="#start">0 · 系统总览</a>
+      <a href="#launch">1 · 启动与登录</a>
+      <a href="#code">2 · 代码修复</a>
+      <a href="#binary">3 · 二进制修复</a>
+      <a href="#tasks">4 · 任务与历史</a>
+      <a href="#settings">5 · 设置逐项</a>
+      <a href="#tools">6 · 输入与命令</a>
+      <a href="#connectors">7 · 连接器与插件</a>
+      <a href="#evidence">8 · 证据与边界</a>
+      <a href="#keys">9 · 快捷键</a>
+      <a href="#trouble">10 · 故障排查</a>
+      <a href="#security">11 · 安全与隐私</a>
+    </nav>
+
+    <article class="guide-body">
+      <section id="start">
+        <h2>0 · 系统总览</h2>
+        <p>
+          BinaryRepair 不是“一个模型给出一句结论”，而是一条可追溯的证据链：
+          <strong>输入 → 规划/规则 → 候选补丁 → 证据 → 验收结论</strong>。
+          对话只负责引导和解释；结论由验收引擎给出，页面不自行判定。
+        </p>
+        <figure class="guide-figure">
+          <svg viewBox="0 0 920 230" role="img" aria-label="从输入到验收结论的证据链">
+            <defs>
+              <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" class="g-arrow"></path>
+              </marker>
+            </defs>
+            <rect class="g-node" x="20" y="72" width="150" height="72" rx="12"></rect>
+            <rect class="g-node" x="205" y="72" width="150" height="72" rx="12"></rect>
+            <rect class="g-node g-node-accent" x="390" y="72" width="150" height="72" rx="12"></rect>
+            <rect class="g-node" x="575" y="72" width="150" height="72" rx="12"></rect>
+            <rect class="g-node g-node-strong" x="760" y="72" width="140" height="72" rx="12"></rect>
+            <text class="g-label" x="95" y="102" text-anchor="middle">输入</text>
+            <text class="g-sub" x="95" y="122" text-anchor="middle">代码 / 样本 / 契约</text>
+            <text class="g-label" x="280" y="102" text-anchor="middle">规划 / 规则</text>
+            <text class="g-sub" x="280" y="122" text-anchor="middle">步骤与约束</text>
+            <text class="g-label" x="465" y="102" text-anchor="middle">候选补丁</text>
+            <text class="g-sub" x="465" y="122" text-anchor="middle">静态建议 / Route A/B</text>
+            <text class="g-label" x="650" y="102" text-anchor="middle">证据</text>
+            <text class="g-sub" x="650" y="122" text-anchor="middle">V0–V5 / 差分 / 日志</text>
+            <text class="g-label" x="830" y="102" text-anchor="middle">验收结论</text>
+            <text class="g-sub" x="830" y="122" text-anchor="middle">由引擎给出</text>
+            <line class="g-line" x1="170" y1="108" x2="200" y2="108" marker-end="url(#arrow)"></line>
+            <line class="g-line" x1="355" y1="108" x2="385" y2="108" marker-end="url(#arrow)"></line>
+            <line class="g-line" x1="540" y1="108" x2="570" y2="108" marker-end="url(#arrow)"></line>
+            <line class="g-line" x1="725" y1="108" x2="755" y2="108" marker-end="url(#arrow)"></line>
+            <text class="g-sub" x="465" y="190" text-anchor="middle">模型解释永远不是证据；页面与导出都不替代验收。</text>
+          </svg>
+          <figcaption>图 1 · 从输入到结论的证据链；任一环节缺失，结论只能是“不确定”或“未完成”。</figcaption>
+        </figure>
+        <div class="guide-callout">
+          <strong>先选路径：</strong>只想看代码问题 → 第 2 节；要修二进制 → 第 3 节；
+          只是看看界面 → 工作台的“演示会话”；需要长期留存 → 第 4 节历史与导出。
+        </div>
+      </section>
+
+      <section id="launch">
+        <h2>1 · 启动与登录</h2>
+        <ol class="guide-steps">
+          <li><strong>解压并启动</strong>：macOS/Linux 运行 <code>./start-gui.sh</code>；Windows 双击 <code>start-gui.bat</code>。首次会创建 <code>.venv</code> 并安装依赖。</li>
+          <li><strong>复制带 token 的地址</strong>：终端会打印 <code>http://127.0.0.1:8123/?token=...</code>；直接点开或粘贴到浏览器。</li>
+          <li><strong>确认已登录</strong>：页面左上角出现工作台侧栏，顶部没有 401；地址栏的 token 会被自动移除并换成会话 cookie。</li>
+          <li><strong>选择模式</strong>：工作台启动卡里选“真实任务”或“演示会话”，再点主按钮。两者区别见卡片下方说明。</li>
+        </ol>
+        <table class="guide-table">
+          <thead><tr><th>现象</th><th>原因</th><th>处理</th></tr></thead>
+          <tbody>
+            <tr><td>401 Authentication required</td><td>没有带 token 或 cookie 失效</td><td>重新打开终端打印的完整地址；不要只访问 <code>/</code></td></tr>
+            <tr><td>端口被占用</td><td>8123 已被其他进程使用</td><td><code>BINARYREPAIR_PORT=8124 ./start-gui.sh</code></td></tr>
+            <tr><td>样式缺失/旧页面</td><td>浏览器缓存</td><td>Cmd/Ctrl + Shift + R 强制刷新</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="code">
+        <h2>2 · 代码修复：从粘贴到补丁</h2>
+        <p>适用于 Python、C、JavaScript 等常见片段；不执行代码，只做静态规则/模型分析。</p>
+        <ol class="guide-steps">
+          <li><strong>进入新建会话</strong>：工作台主按钮 → 真实任务；或直接在输入框粘贴代码。</li>
+          <li><strong>提供代码</strong>：可用 ``` 围栏，也可直接粘贴多行代码；支持从 <code>+</code> 菜单上传文本文件、拖放或粘贴文件。</li>
+          <li><strong>发送</strong>：默认 Enter；若在设置改为 Ctrl/Cmd+Enter，则按对应组合键。</li>
+          <li><strong>读结果卡</strong>：先看标题/风险级别/CWE，再看“覆盖范围”和“警醒”；展开每条 finding 看证据、影响、修复、参考。</li>
+          <li><strong>取补丁</strong>：复制补丁、复制差异；长代码点“展开全部”。</li>
+          <li><strong>复核</strong>：把补丁贴回你的项目测试；静态建议不是验收结论。</li>
+        </ol>
+        <div class="guide-grid">
+          <div class="guide-card"><strong>规则模式</strong><p>未配置模型 key 时使用本地规则，结果确定、可离线复现；覆盖常见 sink，不覆盖业务语义。</p></div>
+          <div class="guide-card"><strong>模型模式</strong><p>服务端配置 key 后，模型给出补丁建议；失败自动回退规则并标注，不会静默冒充模型结果。</p></div>
+        </div>
+        <div class="guide-callout guide-callout-warn">
+          <strong>不要误读：</strong>“发现 2 处问题”是静态命中；“已生成补丁”是可复核建议，不等于“漏洞已修复”。
+        </div>
+      </section>
+
+      <section id="binary">
+        <h2>3 · 二进制修复：引导式建单</h2>
+        <ol class="guide-steps">
+          <li><strong>描述缺陷</strong>：在对话里写清样本、函数/输入、期望行为；后端返回引导计划。</li>
+          <li><strong>上传样本</strong>：点 <code>+</code> → 上传二进制样本，或把文件拖入上传区；不是所有格式都支持。</li>
+          <li><strong>填用例与契约</strong>：有效输入、无效输入、环境、禁止行为、可接受结果；这些字段会成为验收义务。</li>
+          <li><strong>逐步复核</strong>：每一步可返回修改；助手只解释，不替你点“创建任务”。</li>
+          <li><strong>创建任务</strong>：确认摘要后点击创建；任务页每 2 秒刷新状态。</li>
+          <li><strong>看证据</strong>：时间线、修改前后、诊断/义务、产物；未回传显示等待占位，不显示 <code>not_run</code> 当作已执行。</li>
+          <li><strong>导出</strong>：JSON/HTML 报告用于复核；导出不代表生产批准。</li>
+        </ol>
+        <div class="guide-callout">
+          <strong>证据优先：</strong>先看“证据来自哪一层”（静态/符号/动态/差分），再看结论；
+          不同层不能互相冒充。
+        </div>
+      </section>
+
+      <section id="tasks">
+        <span id="history" class="guide-anchor"></span>
+        <h2>4 · 任务、工作区与服务端历史</h2>
+        <h3>4.1 任务列表</h3>
+        <p>侧栏只列本浏览器打开/创建过的任务，状态逐条向 controller 核对；不是“全量任务列表”。</p>
+        <ul>
+          <li><strong>搜索</strong>：按名称或任务号过滤。</li>
+          <li><strong>置顶 / 重命名 / 删除</strong>：悬停任务行出现操作；删除只移除本机记录，后端任务仍在。</li>
+          <li><strong>后端已不可查</strong>：重启 mock 服务或内存任务清空后会显示；记录仍可追溯。</li>
+        </ul>
+        <h3>4.2 工作区</h3>
+        <p>侧栏工作区菜单切换服务端配置的工作区；新建会话会带上当前选择。默认值可在设置中改为“跟随服务端默认”。</p>
+        <h3>4.3 服务端历史</h3>
+        <p>任务与草稿对话写入本机服务端 SQLite；同一服务实例内换浏览器可恢复。徽章显示
+          <code>服务端历史 / 同步中 / 本地暂存 / 草稿已同步</code>。</p>
+        <ul>
+          <li>“新建任务”带 <code>?new=1</code>：清空草稿后开始空白会话。</li>
+          <li>旧标签页的过期写入会被 generation 守卫拒绝，不会复活已清空草稿。</li>
+          <li>默认只监听回环地址；跨设备访问需要显式改变部署方式并保护 token。</li>
+        </ul>
+        <div class="guide-callout guide-callout-warn">
+          <strong>清空要分清：</strong>“清空本机任务列表”只影响当前浏览器；
+          “清空服务端历史”会删除所有任务/草稿对话，无法恢复。
+        </div>
+      </section>
+
+      <section id="settings">
+        <h2>5 · 设置逐项</h2>
+        <table class="guide-table">
+          <thead><tr><th>设置</th><th>作用</th><th>建议</th></tr></thead>
+          <tbody>
+            <tr><td>主题</td><td>浅色 / 深色 / 跟随系统</td><td>夜间调试用深色；演示投影用深色对比更强</td></tr>
+            <tr><td>密度</td><td>舒适 / 紧凑</td><td>小屏或长对话用紧凑</td></tr>
+            <tr><td>正文字号</td><td>对话与说明正文</td><td>投屏用大，笔记本用标准</td></tr>
+            <tr><td>代码字号</td><td>代码块/差异</td><td>10–16 px 实时预览</td></tr>
+            <tr><td>界面动画</td><td>开场、悬停、页面转场</td><td>晕动敏感或低配机关闭</td></tr>
+            <tr><td>发送键</td><td>Enter 或 Ctrl/Cmd+Enter</td><td>长文写作建议 Ctrl/Cmd+Enter</td></tr>
+            <tr><td>自动滚动</td><td>新消息自动到底</td><td>阅读长证据时关闭</td></tr>
+            <tr><td>任务排序</td><td>最近使用 / 名称</td><td>任务多时置顶+名称</td></tr>
+            <tr><td>服务端历史同步</td><td>关闭后仅本机缓存</td><td>涉密演示可临时关闭；重新开启会继续同步</td></tr>
+            <tr><td>默认工作区/模式</td><td>新建会话初始值</td><td>团队固定环境时设置</td></tr>
+          </tbody>
+        </table>
+        <p>设置只保存在本浏览器，会上传到服务端的只有你明确创建的任务/历史与模型 key（后者只存服务端）。</p>
+      </section>
+
+      <section id="tools">
+        <h2>6 · 输入工具栏与命令面板</h2>
+        <h3>6.1 加号菜单</h3>
+        <ul>
+          <li><strong>上传代码/文本文件</strong>：多选、单文件 400 KB；自动包成带文件名的代码块。</li>
+          <li><strong>上传二进制样本</strong>：只在引导建单的上传步骤可用；不是“把二进制塞进聊天框”。</li>
+          <li><strong>插入代码块 / 漏洞示例 / 审查模板</strong>：用于快速构造可复现输入。</li>
+          <li><strong>清空当前对话</strong>：删除本任务/草稿的本机与服务端记录后重开。</li>
+          <li><strong>拖放 / 粘贴文件</strong>：文本文件可直接入框；二进制会提示走样本上传。</li>
+        </ul>
+        <h3>6.2 命令面板</h3>
+        <p><kbd>Ctrl/Cmd + K</kbd> 打开：新建、工作台、连接器、方法、设置、指南、主题、侧栏。
+          支持中英文关键词；↑↓ 选择，Enter 打开，Esc 关闭。</p>
+      </section>
+
+      <section id="connectors">
+        <h2>7 · 连接器与插件</h2>
+        <p>连接器是运行时接入点；插件是只读声明式清单。两者在页面分区展示，不混在一起。</p>
+        <ol class="guide-steps">
+          <li>在连接器页找目标工具（Ghidra、Rizin、angr、Frida、QEMU、GDB、Docker 等）。</li>
+          <li>按卡片中的环境变量/安装步骤准备；点环境变量名可复制。</li>
+          <li>重启 GUI，刷新页面；状态变为“已就绪”。</li>
+          <li>注意：“已就绪”只代表本机具备条件，不代表远端已连通或已实际调用。</li>
+          <li>插件清单放在 <code>plugins/</code>，页面只读取、不加载执行；需要时按清单协议自行接入。</li>
+        </ol>
+        <div class="guide-callout">
+          <strong>官方入口：</strong>
+          <a href="https://ghidra-sre.org/" target="_blank" rel="noreferrer">Ghidra</a> ·
+          <a href="https://angr.io/" target="_blank" rel="noreferrer">angr</a> ·
+          <a href="https://frida.re/docs/home/" target="_blank" rel="noreferrer">Frida</a> ·
+          <a href="https://www.qemu.org/docs/master/" target="_blank" rel="noreferrer">QEMU</a> ·
+          <a href="https://github.com/GNOME/diaphora" target="_blank" rel="noreferrer">Diaphora</a> ·
+          <a href="https://aflplus.plus/" target="_blank" rel="noreferrer">AFL++</a> ·
+          <a href="https://cwe.mitre.org/" target="_blank" rel="noreferrer">CWE</a>
+        </div>
+      </section>
+
+      <section id="evidence">
+        <span id="methods" class="guide-anchor"></span>
+        <h2>8 · 证据等级与验证边界</h2>
+        <p>二进制修复建议采用分层证据，而不是“模型说可以”。阅读结果时按以下顺序提问：</p>
+        <table class="guide-table">
+          <thead><tr><th>层级</th><th>回答的问题</th><th>不能证明什么</th></tr></thead>
+          <tbody>
+            <tr><td>V0 / 静态</td><td>缺陷是否真实存在？调用点/边界是否正确？</td><td>不能证明运行时可达</td></tr>
+            <tr><td>V1–V2 / 符号</td><td>哪些输入能到达危险点？约束是否可满足？</td><td>不能替代真实执行</td></tr>
+            <tr><td>V3 / 动态</td><td>真实运行时是否触发、修复后是否消失？</td><td>不能覆盖所有输入</td></tr>
+            <tr><td>V4 / 模型级</td><td>目标函数内的安全性是否成立？</td><td>不是全程序二进制证明</td></tr>
+            <tr><td>V5 / 差分</td><td>只改了目标行为吗？其他行为是否异常？</td><td>不等于形式化等价</td></tr>
+          </tbody>
+        </table>
+        <div class="guide-callout guide-callout-warn">
+          <strong>不要把“工具跑通”当“补丁正确”：</strong>没有复现、没有差分、没有证据，最多是“看起来对”。
+          本工具的导出也不代表生产批准。
+        </div>
+        <p>更完整的工具矩阵与四个验证问题见 <a href="/methods">方法与工具</a>。</p>
+      </section>
+
+      <section id="keys">
+        <h2>9 · 快捷键</h2>
+        <ul class="guide-keys">
+          <li><kbd>Enter</kbd><span>发送（默认；设置可改为 Ctrl/Cmd+Enter）</span></li>
+          <li><kbd>Shift + Enter</kbd><span>换行</span></li>
+          <li><kbd>Ctrl/Cmd + K</kbd><span>命令面板</span></li>
+          <li><kbd>Ctrl/Cmd + \</kbd><span>收起/展开侧栏</span></li>
+          <li><kbd>Esc</kbd><span>退出专注 / 关闭弹层</span></li>
+          <li><kbd>/</kbd><span>在输入框开头调用 /skip /status /restart</span></li>
+        </ul>
+      </section>
+
+      <section id="trouble">
+        <h2>10 · 故障排查</h2>
+        <table class="guide-table">
+          <thead><tr><th>症状</th><th>先检查</th><th>处理</th></tr></thead>
+          <tbody>
+            <tr><td>计划服务未接通</td><td>右侧模型 key / 后端状态</td><td>配置 key 或继续用规则模式；页面不会用占位内容冒充计划</td></tr>
+            <tr><td>任务 404 / 后端已不可查</td><td>是否重启过 mock 服务</td><td>重新创建任务；本机记录仍保留</td></tr>
+            <tr><td>工具未检测到</td><td>PATH、Python 模块、环境变量</td><td>安装后重启 GUI，再刷新连接器页</td></tr>
+            <tr><td>页面文字看不清</td><td>主题/密度/字号</td><td>切换深色/浅色、调整字号；仍有问题请截图反馈</td></tr>
+            <tr><td>服务端历史为空</td><td>是否换了浏览器/服务实例</td><td>同一服务实例 + 会话 token；草稿共享，任务按 id</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="security">
+        <h2>11 · 安全与隐私</h2>
+        <ul>
+          <li>默认只监听 <code>127.0.0.1</code>；对外分享必须显式开隧道/改绑定，并保护 token。</li>
+          <li>模型 key 只保存在本机服务端，不回显、不写入导出；不要提交 <code>.env</code>。</li>
+          <li>上传/修复后的二进制不在本机执行；解析、编译、符号分析属于受控 guest。</li>
+          <li>插件是只读清单，不会自动加载执行；连接器状态不等于远端连通。</li>
+          <li>演示数据是合成 fixture，可用于展示，不可作为真实修复证据。</li>
+        </ul>
+      </section>
+    </article>
+  </div>
+</div>
+{% endblock %}

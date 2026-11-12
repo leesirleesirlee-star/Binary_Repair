@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+
+{% block title %}方法与工具{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/css/methods.css?v=20261113a">
+{% endblock %}
+
+{% block content %}
+<div class="methods" data-testid="methods-page">
+  <header class="methods-head">
+    <div>
+      <p class="methods-eyebrow">METHODS / BINARY REPAIR</p>
+      <h1 class="ds-page-title">方法与工具</h1>
+      <p class="ds-page-sub">
+        二进制修复不是「一个工具给出答案」，而是一条证据链：定位、静态恢复、符号探索、
+        动态确认、差分验证与回归输入。每一环都只能回答一部分问题。
+      </p>
+    </div>
+    <a class="ds-btn" href="/connectors#connectors">查看本机接入状态</a>
+  </header>
+
+  <section class="methods-chain" aria-labelledby="methods-chain-title">
+    <h2 id="methods-chain-title">修复链</h2>
+    <ol class="methods-steps">
+      <li>
+        <span class="methods-step-no">01</span>
+        <div><strong>复现与定位</strong><p>先固定可重复的崩溃/错误输入，记下版本、环境与调用路径；没有复现就没有「修好了」。</p></div>
+      </li>
+      <li>
+        <span class="methods-step-no">02</span>
+        <div><strong>静态恢复</strong><p>用 Ghidra/Rizin/objdump 恢复函数边界与伪代码，标出缺陷区间与相邻控制流。</p></div>
+      </li>
+      <li>
+        <span class="methods-step-no">03</span>
+        <div><strong>符号探索</strong><p>angr/Triton 求「哪些输入能到达危险点」，把候选输入变成可检查的约束。</p></div>
+      </li>
+      <li>
+        <span class="methods-step-no">04</span>
+        <div><strong>动态确认</strong><p>Frida/GDB/QEMU 在真实或模拟环境里观察寄存器、内存和 API，确认路径确实发生。</p></div>
+      </li>
+      <li>
+        <span class="methods-step-no">05</span>
+        <div><strong>差分验证</strong><p>比较修复前后的二进制与行为：目标缺陷消失，其他行为没有意外变化。</p></div>
+      </li>
+      <li>
+        <span class="methods-step-no">06</span>
+        <div><strong>回归与模糊</strong><p>AFL++/syzkaller 找相邻路径与回归；通过不等于安全，只是没有发现新的反例。</p></div>
+      </li>
+    </ol>
+  </section>
+
+  <section class="methods-tools" aria-labelledby="methods-tools-title">
+    <h2 id="methods-tools-title">工具矩阵</h2>
+    <div class="methods-grid">
+      <article class="methods-card">
+        <span class="methods-tag">STATIC</span>
+        <h3>Ghidra · Rizin · objdump</h3>
+        <p>无头反编译、函数/符号恢复与静态证据。Route B 的 objdump/readelf 输出用于基线自检；它证明的是「观察到的字节与指令」，不是「行为正确」。</p>
+        <p class="methods-how">在本工作台：连接器 <code>ghidra</code>、<code>rizin</code>、<code>binutils</code> 会探测本机是否具备条件。</p>
+        <div class="methods-links">
+          <a href="https://ghidra-sre.org/" target="_blank" rel="noopener noreferrer">Ghidra ↗</a>
+          <a href="https://rizin.re/" target="_blank" rel="noopener noreferrer">Rizin ↗</a>
+          <a href="https://www.gnu.org/software/binutils/" target="_blank" rel="noopener noreferrer">binutils ↗</a>
+        </div>
+      </article>
+      <article class="methods-card">
+        <span class="methods-tag">SYMBOLIC</span>
+        <h3>angr · Triton</h3>
+        <p>把「如何到达危险点」转成路径约束。适合边界清晰的小函数；路径爆炸、外部调用与并发会让模型失真。</p>
+        <p class="methods-how">在本工作台：<code>angr</code>、<code>triton</code> 作为 Python 模块接入；未安装时连接器显示「未检测到」。</p>
+        <div class="methods-links">
+          <a href="https://angr.io/" target="_blank" rel="noopener noreferrer">angr ↗</a>
+          <a href="https://triton-library.github.io/" target="_blank" rel="noopener noreferrer">Triton ↗</a>
+        </div>
+      </article>
+      <article class="methods-card">
+        <span class="methods-tag">DYNAMIC</span>
+        <h3>Frida · GDB · QEMU</h3>
+        <p>运行时插桩、崩溃现场与跨架构模拟。动态证据最接近真实执行，但依赖环境、输入与观察点选择。</p>
+        <p class="methods-how">在本工作台：<code>frida</code>、<code>gdb</code>、<code>qemu</code> 探测 PATH；工具就绪只代表可以发起请求。</p>
+        <div class="methods-links">
+          <a href="https://frida.re/docs/home/" target="_blank" rel="noopener noreferrer">Frida ↗</a>
+          <a href="https://sourceware.org/gdb/documentation/" target="_blank" rel="noopener noreferrer">GDB ↗</a>
+          <a href="https://www.qemu.org/docs/master/" target="_blank" rel="noopener noreferrer">QEMU ↗</a>
+        </div>
+      </article>
+      <article class="methods-card">
+        <span class="methods-tag">DIFF</span>
+        <h3>Diaphora · BinDiff</h3>
+        <p>把修复前后的二进制函数对齐，定位变化区间；差异本身不是正确性证明，但能暴露意外改动。</p>
+        <p class="methods-how">在本工作台：差分结果进入证据页，和契约、验收义务分开展示。</p>
+        <div class="methods-links">
+          <a href="https://github.com/GNOME/diaphora" target="_blank" rel="noopener noreferrer">Diaphora ↗</a>
+          <a href="https://www.zynamics.com/bindiff.html" target="_blank" rel="noopener noreferrer">BinDiff ↗</a>
+        </div>
+      </article>
+      <article class="methods-card">
+        <span class="methods-tag">FUZZ</span>
+        <h3>AFL++ · syzkaller</h3>
+        <p>覆盖引导的输入生成，用于发现回归与相邻路径；内核/系统调用面适合 syzkaller，用户态目标适合 AFL++。</p>
+        <p class="methods-how">在本工作台：模糊测试是候选证据来源，不能替代人工契约与验收结论。</p>
+        <div class="methods-links">
+          <a href="https://aflplus.plus/" target="_blank" rel="noopener noreferrer">AFL++ ↗</a>
+          <a href="https://github.com/google/syzkaller" target="_blank" rel="noopener noreferrer">syzkaller ↗</a>
+        </div>
+      </article>
+      <article class="methods-card">
+        <span class="methods-tag">CONTAINMENT</span>
+        <h3>Docker · 隔离运行</h3>
+        <p>不可信样本应在容器或专用虚拟机里运行，限制网络、挂载与权限；工具就绪不等于沙箱配置正确。</p>
+        <p class="methods-how">在本工作台：连接器 <code>docker</code> 只探测 CLI，不自动启动容器。</p>
+        <div class="methods-links">
+          <a href="https://docs.docker.com/" target="_blank" rel="noopener noreferrer">Docker ↗</a>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <section class="methods-questions" aria-labelledby="methods-q-title">
+    <h2 id="methods-q-title">验证要回答的四个问题</h2>
+    <div class="methods-q-grid">
+      <div><strong>1. 缺陷真的复现了吗？</strong><p>输入、版本、环境、崩溃信号必须可重复；不可复现的修复只是猜测。</p></div>
+      <div><strong>2. 补丁只改了目标行为吗？</strong><p>差分、回归用例与相邻路径检查；意外改动和未覆盖路径都要显式记录。</p></div>
+      <div><strong>3. 证据来自哪一层？</strong><p>静态、符号、动态、模糊各自有边界；不能把「模型说可以」当成运行结果。</p></div>
+      <div><strong>4. 谁给出结论？</strong><p>验收引擎按契约判定；助手、工具和页面都不自行宣布「已修复」。</p></div>
+    </div>
+  </section>
+
+  <section class="methods-maturity" aria-labelledby="methods-maturity-title">
+    <h2 id="methods-maturity-title">证据成熟度与高级方法</h2>
+    <p class="methods-sub">
+      全球修复研究正在从「生成一个补丁」转向「证明补丁在什么范围内、用什么证据成立」。
+      本工作台采用同一方向：先记录可复核的观察，再谈覆盖与验收。
+    </p>
+    <table class="methods-matrix">
+      <thead><tr><th>层级</th><th>回答的问题</th><th>本工作台实现</th><th>仍不能证明</th></tr></thead>
+      <tbody>
+        <tr><td>V0</td><td>缺陷是否真实存在？调用点/边界是否正确？</td><td>原始 SHA、契约、静态 gate、修改区域</td><td>运行时可达性</td></tr>
+        <tr><td>V1–V2</td><td>哪些输入能到达危险点？约束是否可满足？</td><td>symbolic/dynamic gate 透传；缺失保持 unknown</td><td>全覆盖路径、并发/外部调用</td></tr>
+        <tr><td>V3</td><td>真实运行时是否触发、修复后是否消失？</td><td>动态 gate、valid/invalid 用例、ASan 类观察</td><td>所有输入、所有环境</td></tr>
+        <tr><td>V4</td><td>目标函数内的安全性是否成立？</td><td>verification/compatibility 字段；模型级结论只读</td><td>全程序形式化等价</td></tr>
+        <tr><td>V5</td><td>只改目标行为吗？其他行为是否异常？</td><td>行为对比 cases、summary、not_claimed</td><td>完整行为等价/生产批准</td></tr>
+      </tbody>
+    </table>
+    <div class="methods-uplift">
+      <article>
+        <h3>已落地的升级</h3>
+        <ul>
+          <li><strong>证据控制室</strong>：总览、V0–V5 矩阵、义务筛选、Attempts、产物指纹、原始 JSON。</li>
+          <li><strong>只读评估 API</strong>：<code>/api/jobs/{id}/evaluation</code> 输出覆盖率、缺口与可观测性指数；不是 verdict。</li>
+          <li><strong>失败即显式</strong>：缺失、not_run、无分母均为 N/A/缺口，绝不折叠成通过。</li>
+          <li><strong>研究映射</strong>：把 SSDF、CWE、SLSA、in-toto、差分/符号/模糊测试映射到可检查字段。</li>
+        </ul>
+      </article>
+      <article>
+        <h3>下一步的工程化路线</h3>
+        <ul>
+          <li>接入 <strong>Alive2/CBMC</strong> 做补丁等价/内存安全证明，而不是只靠测试。</li>
+          <li>把 <strong>SLSA/in-toto</strong>  provenance 与证据包绑定，支持可复现构建。</li>
+          <li>建立 <strong>ARVO/CVEfixes/Vul4J</strong> 回归基准，报告 precision/recall/成本/时延。</li>
+          <li>符号/动态/模糊工具由本机连接器按需启用；未安装时保持 unknown。</li>
+        </ul>
+      </article>
+    </div>
+    <p class="methods-foot">
+      评估口径：可观测性指数 = 0.35×证据覆盖 + 0.25×义务通过率 + 0.20×用例通过率 +
+      0.10×产物完备 + 0.10×行为对比。它只衡量证据覆盖，不替代验收引擎。
+    </p>
+  </section>
+
+  <section class="methods-refs" aria-labelledby="methods-refs-title">
+    <h2 id="methods-refs-title">参考与延伸</h2>
+    <ul>
+      <li><a href="https://csrc.nist.gov/pubs/sp/800/218/final" target="_blank" rel="noopener noreferrer">NIST SP 800-218 SSDF</a>：安全软件开发生命周期与验证实践。</li>
+      <li><a href="https://cwe.mitre.org/" target="_blank" rel="noopener noreferrer">CWE</a> / <a href="https://cwe.mitre.org/top25/" target="_blank" rel="noopener noreferrer">CWE Top 25</a>：漏洞分类与修复口径。</li>
+      <li><a href="https://owasp.org/www-project-top-ten/" target="_blank" rel="noopener noreferrer">OWASP Top 10</a>：应用层风险与修复建议。</li>
+      <li><a href="https://slsa.dev/spec/v1.0/" target="_blank" rel="noopener noreferrer">SLSA v1.0</a> / <a href="https://in-toto.io/" target="_blank" rel="noopener noreferrer">in-toto</a>：构建来源与供应链证据。</li>
+      <li><a href="https://github.com/ossf/scorecard" target="_blank" rel="noopener noreferrer">OpenSSF Scorecard</a>：开源项目安全实践度量。</li>
+      <li><a href="https://github.com/google/oss-fuzz" target="_blank" rel="noopener noreferrer">OSS-Fuzz</a> / <a href="https://aflplus.plus/" target="_blank" rel="noopener noreferrer">AFL++</a>：持续模糊与回归。</li>
+      <li><a href="https://github.com/secureIT-project/CVEfixes" target="_blank" rel="noopener noreferrer">CVEfixes</a> / <a href="https://github.com/tuhh-softsec/vul4j" target="_blank" rel="noopener noreferrer">Vul4J</a> / <a href="https://github.com/rjust/defects4j" target="_blank" rel="noopener noreferrer">Defects4J</a>：修复基准与回归数据。</li>
+      <li><a href="https://github.com/AliveToolkit/alive2" target="_blank" rel="noopener noreferrer">Alive2</a> / <a href="https://www.cprover.org/cbmc/" target="_blank" rel="noopener noreferrer">CBMC</a>：翻译验证/有界模型检查。</li>
+      <li><a href="https://github.com/chenfanaichifan/binary-repair" target="_blank" rel="noopener noreferrer">本项目仓库</a>：实现、测试与架构说明。</li>
+    </ul>
+    <p class="methods-foot">
+      工具会变化，方法链不变：先复现，再定位，再提出候选，最后用独立证据验证。
+      本页的方法说明不构成对任何样本「已修复」的结论。
+    </p>
+  </section>
+</div>
+{% endblock %}

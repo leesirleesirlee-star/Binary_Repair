@@ -27,7 +27,7 @@ interface and renders whatever the controller reports.
 
 | `BINARYREPAIR_BACKEND` | Adapter | What it proves |
 |---|---|---|
-| `mock` (default) | `MockBackend` | UI/contract behaviour only; `demo: true`, execution never real |
+| `mock` (default) | `MockBackend` | UI/contract behaviour plus the in-process planner (same seam as `local`); `demo: true`, execution never real |
 | `local` | `LocalBackend` | Real Member 1 controller store (`app/services/jobs.py`, SQLite); `demo: false`, execution not implemented yet |
 | `http` | `HttpBackend` | GUI talks to a controller over HTTP; `demo` comes from the controller snapshot |
 

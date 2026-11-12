@@ -3,7 +3,7 @@
 {% block title %}修复控制台{% endblock %}
 
 {% block head %}
-<link rel="stylesheet" href="/static/css/agent.css?v=20261104b">
+<link rel="stylesheet" href="/static/css/agent.css?v=20261113b">
 {% endblock %}
 
 {% block content %}
@@ -19,23 +19,22 @@
   data-assistant-mode="{{ assistant.mode }}"
   data-assistant-available="{{ '1' if assistant.available else '0' }}"
   data-csrf="{{ csrf_token }}"
+  data-fresh="{{ '1' if request.query_params.get('new') == '1' else '0' }}"
 >
   <div class="agent-top">
     <div class="agent-heading">
       <a class="agent-back" href="/agent" data-testid="agent-back">← 全部任务</a>
       <h1 class="ds-page-title">
-        {% if job_id %}修复任务 <code class="agent-job-id">{{ job_id[:8] }}</code>{% else %}新建修复任务{% endif %}
+        {% if job_id %}修复任务 <code class="agent-job-id">{{ job_id[:8] }}</code>{% else %}新建任务{% endif %}
       </h1>
-      <p class="ds-page-sub">
-        这是{% if job_id %}该任务{% else %}一次新任务{% endif %}的独立会话：对话与操作记录按任务分开保存。
-        助手只做引导与解释；创建任务、开始执行由你点击确认，结论由验收引擎给出。
-      </p>
     </div>
     <div class="agent-badges">
       <span id="agent-workspace-chip" class="ds-chip" data-testid="agent-workspace-chip">{{ workspace.label }}</span>
       <span id="agent-mode-badge" class="ds-chip accent" data-testid="agent-mode-badge">助手模式：读取中…</span>
       <span id="agent-job-chip" class="ds-chip" data-testid="agent-job-chip">未选择任务</span>
-      <span id="agent-poll" class="agent-poll" data-testid="agent-poll">待连接</span>
+      <span id="agent-history-sync" class="ds-chip" data-testid="agent-history-sync" data-state="local">本机草稿</span>
+      <span id="agent-poll" class="agent-poll" data-testid="agent-poll">待命</span>
+      <button id="agent-key-open" class="agent-side-toggle agent-key-open" type="button" data-testid="agent-key-open">配置模型</button>
     </div>
   </div>
 
@@ -56,17 +55,19 @@
       aria-controls="agent-side"
       aria-expanded="true"
     >收起状态面板</button>
-    {% if job_id %}
-    <a class="agent-tab agent-tab-link" href="/jobs/{{ job_id }}" data-testid="agent-open-comparison">对比页</a>
-    <a class="agent-tab agent-tab-link" href="/jobs/{{ job_id }}/evidence" data-testid="agent-open-evidence">证据与导出</a>
-    {% else %}
-    <a class="agent-tab agent-tab-link" href="/jobs/new" data-testid="agent-switch-form">改用表单建单</a>
-    {% endif %}
+    <button
+      type="button"
+      class="agent-side-toggle"
+      id="agent-focus-toggle"
+      data-testid="agent-focus-toggle"
+      title="隐藏页头与标签，放大对话区"
+      aria-pressed="false"
+    >专注对话</button>
   </div>
 
-  <p id="agent-history-note" class="agent-history-note" data-testid="agent-history-note">
-    对话与操作记录按任务保存在本机浏览器；服务端历史需要 M5 的 T8.1 持久化接入后才会跨设备可查。
-  </p>
+
+
+  <button type="button" class="agent-focus-exit" id="agent-focus-exit" data-testid="agent-focus-exit" hidden>退出专注</button>
 
   <div class="agent-body">
     <section class="agent-main">
@@ -79,10 +80,31 @@
             id="agent-input"
             data-testid="agent-input"
             rows="2"
-            placeholder="输入回答；Enter 发送，Shift+Enter 换行，/ 调用指令"
+            placeholder="输入回答，或粘贴代码直接修复；Enter 发送，Shift+Enter 换行，/ 调用指令"
           ></textarea>
           <div class="ds-composer-bar">
-            <button type="button" class="ds-icon-btn" id="agent-attach" title="上传样本" aria-label="上传样本">＋</button>
+            <div class="agent-plus-wrap">
+              <button type="button" class="ds-icon-btn" id="agent-attach" title="添加内容" aria-label="添加内容" aria-haspopup="true" aria-expanded="false">＋</button>
+              <div class="agent-plus-menu" id="agent-plus-menu" hidden>
+                <p class="agent-plus-label">添加内容</p>
+                <button type="button" data-plus="text">上传代码 / 文本文件…</button>
+                <button type="button" data-plus="binary">上传二进制样本…</button>
+                <button type="button" data-plus="code">插入代码块</button>
+                <p class="agent-plus-label">漏洞示例</p>
+                <div class="agent-plus-snippets">
+                  <button type="button" data-snippet="py">Python shell</button>
+                  <button type="button" data-snippet="flask">Flask debug</button>
+                  <button type="button" data-snippet="c">C strcpy</button>
+                  <button type="button" data-snippet="js">JS innerHTML</button>
+                </div>
+                <button type="button" data-plus="template">插入审查模板</button>
+                <span class="agent-plus-sep" aria-hidden="true"></span>
+                <button type="button" data-plus="clear">清空当前对话</button>
+                <a href="/guide">使用说明</a>
+              </div>
+            </div>
+            <input type="file" id="agent-text-file" multiple hidden
+                   accept=".c,.h,.cc,.cpp,.py,.js,.ts,.txt,.json,.md,.html,.sql,.php,.go,.java,.rs,.sh,.yaml,.yml,.toml">
             <span class="ds-chip">本地工作区</span>
             <div class="ds-composer-meta">
               <span class="agent-composer-note">助手不发起执行</span>
@@ -97,6 +119,69 @@
       </div>
 
       <div id="agent-view-result" data-testid="agent-view-result" hidden>
+        <header class="agent-result-head">
+          <div>
+            <p class="agent-result-kicker">EVIDENCE CONTROL / READ-ONLY</p>
+            <h2>结果与证据</h2>
+            <p class="agent-result-lede">
+              证据优先、结论只读。这里汇总验收引擎回传的每一个字段、覆盖缺口和原始 JSON；
+              页面不会因为“看起来正常”而自行给出通过。
+            </p>
+          </div>
+          <div class="agent-result-actions">
+            <button type="button" id="agent-result-refresh" data-testid="agent-result-refresh">刷新评估</button>
+            <a id="agent-result-export" href="#" data-testid="agent-result-export">导出证据包 ↗</a>
+            <a id="agent-result-report" href="#" data-testid="agent-result-report">HTML 报告 ↗</a>
+          </div>
+        </header>
+
+        <section class="agent-scorecard-wrap" aria-labelledby="agent-scorecard-title">
+          <div class="agent-result-section-head">
+            <h2 id="agent-scorecard-title">证据总览</h2>
+            <span>可观测性指数仅衡量证据覆盖，不是修复结论</span>
+          </div>
+          <div id="agent-scorecard" class="agent-scorecard" data-testid="agent-scorecard"></div>
+          <div id="agent-bottlenecks" class="agent-bottlenecks" data-testid="agent-bottlenecks"></div>
+        </section>
+
+        <section class="agent-panel" aria-labelledby="agent-evidence-matrix-title">
+          <div class="agent-result-section-head">
+            <h2 id="agent-evidence-matrix-title" class="agent-panel-title">证据矩阵 · V0–V5</h2>
+            <span>只显示“是否回传”，不把缺失当通过</span>
+          </div>
+          <div id="agent-evidence-matrix" data-testid="agent-evidence-matrix"></div>
+        </section>
+
+        <section class="agent-panel" aria-labelledby="agent-obligation-table-title">
+          <div class="agent-result-section-head">
+            <h2 id="agent-obligation-table-title" class="agent-panel-title">义务明细</h2>
+            <span>逐字保留后端 result；not_run 就是不执行</span>
+          </div>
+          <div class="agent-result-filters" role="group" aria-label="义务筛选">
+            <button type="button" class="is-active" data-obligation-filter="all">全部</button>
+            <button type="button" data-obligation-filter="fail">失败</button>
+            <button type="button" data-obligation-filter="not_run">未执行</button>
+            <button type="button" data-obligation-filter="pass">通过</button>
+          </div>
+          <div id="agent-obligation-table" class="agent-table-wrap" data-testid="agent-obligation-table"></div>
+        </section>
+
+        <section class="agent-panel" aria-labelledby="agent-attempts-title">
+          <div class="agent-result-section-head">
+            <h2 id="agent-attempts-title" class="agent-panel-title">尝试历史 · Attempts</h2>
+            <span>每次执行独立编号；失败/重试不覆盖旧证据</span>
+          </div>
+          <div id="agent-attempt-table" class="agent-table-wrap" data-testid="agent-attempt-table"></div>
+        </section>
+
+        <section class="agent-panel" aria-labelledby="agent-artifacts-title">
+          <div class="agent-result-section-head">
+            <h2 id="agent-artifacts-title" class="agent-panel-title">产物与指纹</h2>
+            <span>补丁、报告与对比产物；仅证明登记，不证明正确</span>
+          </div>
+          <div id="agent-artifact-table" class="agent-table-wrap" data-testid="agent-artifact-table"></div>
+        </section>
+
         <section class="agent-panel" aria-labelledby="agent-timeline-title">
           <h2 id="agent-timeline-title" class="agent-panel-title">执行时间线</h2>
           <ol id="agent-timeline" class="agent-timeline" data-testid="agent-timeline"></ol>
@@ -140,15 +225,61 @@
           </div>
           <ul id="agent-downloads" class="agent-downloads" data-testid="agent-downloads"></ul>
         </section>
+
+        <section class="agent-panel" aria-labelledby="agent-raw-title">
+          <div class="agent-result-section-head">
+            <h2 id="agent-raw-title" class="agent-panel-title">原始证据 JSON</h2>
+            <span>用于复核、归档与跨工具比对</span>
+          </div>
+          <div id="agent-raw-json" data-testid="agent-raw-json"></div>
+        </section>
       </div>
     </section>
 
+    <div class="agent-side-resizer" id="agent-side-resizer" role="separator"
+         aria-orientation="vertical" tabindex="0" aria-label="拖动或使用方向键调整状态面板宽度"
+         title="拖动调整宽度；双击复位"></div>
+
     <aside class="agent-side" id="agent-side" aria-label="状态面板">
       <h2 class="agent-side-title">状态面板</h2>
+      <button id="agent-key-close" class="agent-key-close" type="button" aria-label="关闭模型配置">×</button>
+      <div class="agent-key-panel" id="assistant-key-panel" data-testid="assistant-key-panel"
+           style="margin:12px 0;padding:10px;border:1px solid rgba(44,41,37,.18);border-radius:10px">
+        <h3 class="agent-side-subtitle">模型 API Key</h3>
+        <p id="assistant-key-status" class="agent-side-note" data-testid="assistant-key-status">读取中…</p>
+
+        <div id="assistant-key-editor" hidden>
+          <label class="agent-side-note" for="assistant-key-username">用户名</label>
+          <input id="assistant-key-username" type="text" autocomplete="username"
+                 placeholder="填写用户名"
+                 data-testid="assistant-key-username"
+                 style="width:100%;box-sizing:border-box;margin:4px 0 8px;padding:6px 8px;border:1px solid #c9c2b5;border-radius:6px">
+          <label class="agent-side-note" for="assistant-key-input">API Key</label>
+          <input id="assistant-key-input" type="password" autocomplete="new-password"
+                 placeholder="输入 key 后保存并测试"
+                 data-testid="assistant-key-input"
+                 style="width:100%;box-sizing:border-box;margin:4px 0 8px;padding:6px 8px;border:1px solid #c9c2b5;border-radius:6px">
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <button id="assistant-key-save" type="button" class="btn ghost" data-testid="assistant-key-save">保存并测试</button>
+            <button id="assistant-key-cancel" type="button" class="btn ghost" data-testid="assistant-key-cancel">取消</button>
+          </div>
+        </div>
+
+        <div id="assistant-key-actions" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+          <button id="assistant-key-replace" type="button" class="btn ghost" data-testid="assistant-key-replace">替换 Key</button>
+          <button id="assistant-key-clear" type="button" class="btn ghost" data-testid="assistant-key-clear">清除已保存 Key</button>
+        </div>
+        <p id="assistant-key-result" class="agent-side-note" data-testid="assistant-key-result"></p>
+        <p class="agent-side-note">用户名用于本机显示并作为模型请求上下文；key 只保存在本机服务端，不回显、不写入日志；环境变量优先。</p>
+      </div>
       <dl class="agent-side-list">
         <div class="agent-side-row">
           <dt>当前步骤</dt>
           <dd id="agent-side-step" data-testid="agent-side-step">—</dd>
+        </div>
+        <div class="agent-side-row">
+          <dt>代码修复</dt>
+          <dd id="agent-code-repair" data-testid="agent-code-repair">—</dd>
         </div>
         <div class="agent-side-row">
           <dt>执行状态</dt>
@@ -167,24 +298,17 @@
       <h3 class="agent-side-subtitle">助手调用元数据</h3>
       <p id="agent-model-meta" class="agent-model-meta" data-testid="agent-model-meta">未提供</p>
 
-      <div class="agent-key-panel" id="assistant-key-panel" data-testid="assistant-key-panel" style="margin:12px 0;padding:10px;border:1px solid rgba(44,41,37,.18);border-radius:10px">
-        <h3 class="agent-side-subtitle">模型 API Key</h3>
-        <p id="assistant-key-status" class="agent-side-note" data-testid="assistant-key-status">读取中…</p>
-        <input id="assistant-key-input" type="password" autocomplete="new-password"
-               placeholder="输入 key 后保存并测试"
-               data-testid="assistant-key-input"
-               style="width:100%;box-sizing:border-box;margin:6px 0;padding:6px 8px;border:1px solid #c9c2b5;border-radius:6px">
-        <div style="display:flex;gap:6px;flex-wrap:wrap">
-          <button id="assistant-key-save" type="button" class="btn ghost" data-testid="assistant-key-save">保存并测试</button>
-          <button id="assistant-key-clear" type="button" class="btn ghost" data-testid="assistant-key-clear">清除</button>
-        </div>
-        <p id="assistant-key-result" class="agent-side-note" data-testid="assistant-key-result"></p>
-        <p class="agent-side-note">key 只保存在本机服务端，不回显、不写入日志；环境变量优先。</p>
-      </div>
       <h3 class="agent-side-subtitle">产物</h3>
       <ul id="agent-side-artifacts" class="agent-side-artifacts" data-testid="agent-side-artifacts">
         <li class="agent-muted">尚无产物</li>
       </ul>
+      {% if job_id %}
+      <p class="agent-side-note agent-side-links">
+        <a href="/jobs/{{ job_id }}" data-testid="agent-open-comparison">对比页</a>
+        ·
+        <a href="/jobs/{{ job_id }}/evidence" data-testid="agent-open-evidence">证据与导出</a>
+      </p>
+      {% endif %}
 
       <p class="agent-side-note">
         义务结果逐字展示后端取值；未回传时显示占位。页面不计算整体结论。
@@ -196,5 +320,5 @@
 
 {% block scripts %}
 <script src="/static/js/agent.fixtures.js?v=20261104a"></script>
-<script src="/static/js/agent.js?v=20261104b"></script>
+<script src="/static/js/agent.js?v=20261113b"></script>
 {% endblock %}

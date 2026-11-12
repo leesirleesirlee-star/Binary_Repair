@@ -36,7 +36,7 @@ DEFAULTS: dict[str, Any] = {
         },
     ],
     "modes": [
-        {"id": "standard", "label": "标准模式", "detail": "表单 + 控制台"},
+        {"id": "standard", "label": "标准模式", "detail": "对话式建单"},
         {"id": "demo", "label": "演示模式", "detail": "fixture 数据"},
     ],
     "defaults": {"workspace": "local", "mode": "standard"},

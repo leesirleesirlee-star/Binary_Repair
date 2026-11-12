@@ -1,0 +1,8 @@
+{
+  "id": "frida-trace",
+  "name": "Frida trace collector",
+  "kind": "collector",
+  "description": "Describes collecting API traces from a live process for later comparison.",
+  "enabled": false,
+  "docs_url": "https://frida.re/docs/home/"
+}

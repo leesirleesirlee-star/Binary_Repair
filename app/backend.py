@@ -374,8 +374,19 @@ class MockBackend:
 
     def get_plan(self, description: str,
                  context: dict[str, Any] | None = None) -> dict[str, Any] | None:
-        # Mock mode has no plan service; a fake plan would be worse than none.
-        return None
+        """Plan in-process through the same seam as local mode.
+
+        The steps come from the real planner (deterministic without a provider
+        key, the LLM branch with one), not from ``demo.py``: a deterministic
+        plan is a genuine answer, and the page labels it as "not a model call".
+        The 503 "not connected" answer is now reserved for a backend without a
+        plan route.
+        """
+        from app.services.assistant import generate_plan
+        from app.services.assistant_llm import client_from_env
+
+        plan = generate_plan(description, context=context, client=client_from_env())
+        return plan.model_dump(mode="json")
 
     def get_artifacts(self, job_id: str) -> dict[str, list[dict[str, Any]]]:
         return demo.artifacts(self._job(job_id))

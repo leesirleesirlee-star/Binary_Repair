@@ -1,0 +1,8 @@
+{
+  "id": "ghidra-export",
+  "name": "Ghidra export bridge",
+  "kind": "exporter",
+  "description": "Describes a headless Ghidra pass that exports functions and decompiler text for review.",
+  "enabled": false,
+  "docs_url": "https://ghidra-sre.org/"
+}

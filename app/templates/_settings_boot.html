@@ -1,0 +1,18 @@
+<script>
+  (function () {
+    try {
+      var stored = JSON.parse(window.localStorage.getItem("br.settings.v1") || "{}");
+      var root = document.documentElement;
+      if (stored.density) { root.dataset.density = stored.density; }
+      if (stored.animations === false) { root.dataset.motion = "off"; }
+      if (stored.fontSize) {
+        var sizes = { small: "13px", "default": "13.5px", large: "15px" };
+        root.dataset.font = stored.fontSize;
+        root.style.setProperty("--chat-font-size", sizes[stored.fontSize] || "13.5px");
+      }
+      if (stored.codeFont) {
+        root.style.setProperty("--code-font-size", stored.codeFont + "px");
+      }
+    } catch (error) { /* ignore */ }
+  })();
+</script>

@@ -1,0 +1,13 @@
+<meta name="theme-color" content="#fbfcff">
+<script>
+  (function () {
+    try {
+      var pref = window.localStorage.getItem("br.theme");
+      if (pref !== "light" && pref !== "dark" && pref !== "system") { pref = "system"; }
+      var dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      var root = document.documentElement;
+      root.setAttribute("data-theme", pref === "system" ? (dark ? "dark" : "light") : pref);
+      root.setAttribute("data-theme-pref", pref);
+    } catch (error) { /* storage may be unavailable */ }
+  })();
+</script>

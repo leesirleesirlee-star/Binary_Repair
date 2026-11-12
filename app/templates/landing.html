@@ -3,71 +3,156 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  {% include "_theme_boot.html" %}
+  {% include "_settings_boot.html" %}
   <title>BinaryRepair · AI 二进制漏洞修复工作台</title>
-  <link rel="stylesheet" href="/static/css/ds.css?v=20261104a">
+  <script>
+    (function () {
+      try {
+        var skip = sessionStorage.getItem("br.booted") === "1";
+        var query = new URLSearchParams(window.location.search);
+        if (skip || query.get("nointro") === "1") {
+          document.documentElement.setAttribute("data-booted", "1");
+        }
+      } catch (error) { /* ignore */ }
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/css/ds.css?v=20261113m">
+  <link rel="stylesheet" href="/static/css/home.css?v=20261113c">
 </head>
-<body>
+<body class="ds-home-body">
+  <div class="boot" id="boot" aria-hidden="true">
+    <div class="boot-grid"></div>
+    <div class="boot-core">
+      <div class="boot-emblem"><span></span></div>
+      <p class="boot-brand">BinaryRepair</p>
+      <p class="boot-status">INITIALIZING SECURE WORKBENCH</p>
+      <div class="boot-track"><span></span></div>
+      <p class="boot-meta">BINARY REPAIR · V0–V5 VERIFICATION</p>
+    </div>
+  </div>
+
   <main class="ds-home">
-    <h1 class="ds-home-brand hero-h1" style="margin:0">二进制漏洞修复 <span class="ds-badge">预览版</span></h1>
-    <p class="ds-home-sub">BinaryRepair · AI 驱动的自动修复与正确性验证工作台</p>
-
-    <div class="ds-home-selectors" data-config-source="{{ ui.source }}">
-      <div class="ds-select" data-select="workspace">
-        <button type="button" class="ds-select" aria-haspopup="true" aria-expanded="false">
-          <span data-role="label">{{ default_workspace.label }}</span> <span class="caret">▾</span>
-        </button>
-        <div class="ds-menu" hidden>
-          {% for ws in ui.workspaces %}
-          <button type="button" data-value="{{ ws.label }}" data-id="{{ ws.id }}"
-                  data-detail="{{ ws.detail }}">{{ ws.label }}</button>
-          {% endfor %}
-          <p class="ds-menu-note">{{ default_workspace.detail }}</p>
-        </div>
+    <header class="home-bar">
+      <a class="home-brand" href="/" aria-label="BinaryRepair 起始页">
+        <span class="ds-brand-mark" aria-hidden="true"></span>
+        <span class="home-brand-name">BinaryRepair</span>
+      </a>
+      <nav class="home-nav" aria-label="快捷入口">
+        <a href="/connectors">连接器</a>
+        <a href="/methods">方法</a>
+        <a href="/settings">设置</a>
+      </nav>
+      <div class="home-actions">
+        {% include "_lang_switch.html" %}
+        {% include "_theme_toggle.html" %}
+        <p class="home-status"><span class="home-dot" aria-hidden="true"></span>本地运行 · 127.0.0.1</p>
       </div>
+    </header>
 
-      <div class="ds-select" data-select="mode">
-        <button type="button" class="ds-select" aria-haspopup="true" aria-expanded="false">
-          <span data-role="label">{{ default_mode.label }}</span> <span class="caret">▾</span>
-        </button>
-        <div class="ds-menu" hidden>
-          {% for mode in ui.modes %}
-          <button type="button" data-value="{{ mode.label }}" data-id="{{ mode.id }}"
-                  data-detail="{{ mode.detail }}">{{ mode.label }}（{{ mode.detail }}）</button>
-          {% endfor %}
-          <p class="ds-menu-note">助手只做引导，结论由验收引擎给出。</p>
+    <div class="home-body">
+      <section class="home-stage">
+        <div class="home-orbit" aria-hidden="true">
+          <i class="orbit ring-a"></i>
+          <i class="orbit ring-b"></i>
+          <i class="orbit ring-c"></i>
+          <span class="orbit-core"></span>
         </div>
-      </div>
+
+        <section class="home-hero" aria-labelledby="home-title">
+          <p class="home-eyebrow">BINARY REPAIR WORKBENCH</p>
+          <h1 class="ds-home-brand hero-h1" id="home-title">二进制漏洞修复 <span class="ds-badge">预览版</span></h1>
+          <p class="ds-home-sub">BinaryRepair · AI 驱动的自动修复与正确性验证工作台</p>
+          <p class="home-lede">描述缺陷、生成引导计划、复核安全契约；修复结论只由验收引擎给出。</p>
+        </section>
+
+        <section class="home-workbench" aria-label="开始一次修复">
+          <div class="ds-home-selectors" data-config-source="{{ ui.source }}">
+            <div class="ds-select" data-select="workspace">
+              <button type="button" class="ds-select" aria-haspopup="true" aria-expanded="false">
+                <span data-role="label">{{ default_workspace.label }}</span> <span class="caret">▾</span>
+              </button>
+              <div class="ds-menu" hidden>
+                {% for ws in ui.workspaces %}
+                <button type="button" data-value="{{ ws.label }}" data-id="{{ ws.id }}"
+                        data-detail="{{ ws.detail }}">{{ ws.label }}</button>
+                {% endfor %}
+                <p class="ds-menu-note">{{ default_workspace.detail }}</p>
+              </div>
+            </div>
+
+            <div class="ds-select" data-select="mode">
+              <button type="button" class="ds-select" aria-haspopup="true" aria-expanded="false">
+                <span data-role="label">{{ default_mode.label }}</span> <span class="caret">▾</span>
+              </button>
+              <div class="ds-menu" hidden>
+                {% for mode in ui.modes %}
+                <button type="button" data-value="{{ mode.label }}" data-id="{{ mode.id }}"
+                        data-detail="{{ mode.detail }}">{{ mode.label }}（{{ mode.detail }}）</button>
+                {% endfor %}
+                <p class="ds-menu-note">助手只做引导，结论由验收引擎给出。</p>
+              </div>
+            </div>
+            <span class="home-selector-hint">工作区与模式决定引导和建单的行为</span>
+          </div>
+
+          <form class="ds-composer" action="/agent/new" method="get" data-testid="home-composer">
+            <input type="hidden" name="workspace" id="home-workspace" value="{{ default_workspace.id }}">
+            <input type="hidden" name="mode" id="home-mode" value="{{ default_mode.id }}">
+            <input type="hidden" name="new" value="1">
+            <input type="hidden" name="fixture" id="home-fixture" value="">
+            <label class="visually-hidden" for="home-q" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">缺陷描述</label>
+            <textarea id="home-q" name="q" rows="3" placeholder="描述二进制缺陷，或粘贴一段带漏洞的代码；/ 调用指令，@ 选择样本"></textarea>
+            <div class="ds-composer-bar">
+              <span class="ds-chip" id="home-workspace-chip">{{ default_workspace.label }}</span>
+              <div class="ds-composer-meta">
+                <span class="home-composer-label">对话式引导</span>
+                <span class="ds-chip accent">ASCII 提交</span>
+                <button class="ds-send" type="submit" aria-label="开始引导" data-testid="home-send">↑</button>
+              </div>
+            </div>
+          </form>
+
+          <div class="ds-home-links">
+            <a class="ds-link-primary" href="/agent/new?workspace={{ default_workspace.id }}&amp;mode={{ default_mode.id }}&amp;new=1" data-testid="landing-agent-cta" data-primary="1">新建任务 <span class="arrow" aria-hidden="true">→</span></a>
+            <a class="ds-link-quiet" href="/guide">使用说明</a>
+          </div>
+        </section>
+      </section>
+
+      <section class="home-principles" aria-label="口径说明">
+        <div class="home-principle">
+          <span class="home-principle-k">界面中文 · 数据 ASCII</span>
+          <span class="home-principle-v">提交与导出的字段保持英文 ASCII。</span>
+        </div>
+        <div class="home-principle">
+          <span class="home-principle-k"><code>not_run</code> 就是未执行</span>
+          <span class="home-principle-v">等待占位不会被当成已执行或已失败。</span>
+        </div>
+        <div class="home-principle">
+          <span class="home-principle-k">阶段 ≠ 结论</span>
+          <span class="home-principle-v">两条独立的轴；导出不代表生产批准。</span>
+        </div>
+      </section>
+
     </div>
 
-    <form class="ds-composer" action="/agent" method="get" data-testid="home-composer">
-      <input type="hidden" name="workspace" id="home-workspace" value="{{ default_workspace.id }}">
-      <input type="hidden" name="mode" id="home-mode" value="{{ default_mode.id }}">
-      <label class="visually-hidden" for="home-q" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">缺陷描述</label>
-      <textarea id="home-q" name="q" rows="3" placeholder="描述你要修复的二进制缺陷，/ 调用指令，@ 选择样本"></textarea>
-      <div class="ds-composer-bar">
-        <a class="ds-icon-btn" href="/jobs/new" title="上传样本并填写表单" aria-label="上传样本">＋</a>
-        <span class="ds-chip" id="home-workspace-chip">{{ default_workspace.label }}</span>
-        <div class="ds-composer-meta">
-          <span>对话式引导</span>
-          <span class="ds-chip accent">ASCII 提交</span>
-          <button class="ds-send" type="submit" aria-label="开始引导" data-testid="home-send">↑</button>
-        </div>
-      </div>
-    </form>
-
-    <div class="ds-home-links">
-      <a class="ds-link-primary" href="/agent?workspace={{ default_workspace.id }}&amp;mode={{ default_mode.id }}" data-testid="landing-agent-cta" data-primary="1">打开修复控制台 →</a>
-      <a href="/jobs/new" data-testid="landing-cta">或使用表单上传 →</a>
-      <a href="/agent?fixture=1" data-testid="home-demo-link">查看演示数据</a>
-    </div>
-
-    <p class="ds-home-note">
-      界面文案为中文，提交与导出的数据为英文 ASCII。<br>
-      未执行的项目显示 <code>not_run</code>；测试机结果未回传时显示等待占位，不会被当成已执行或已失败。<br>
-      阶段与结论是两条独立的轴，导出不代表生产批准。
-    </p>
+    <footer class="home-foot">
+      <span>BinaryRepair · 本地工作台 · 仅 127.0.0.1 · 不执行上传文件</span>
+      <a href="/guide">使用说明</a>
+      <a href="/settings">设置</a>
+    </footer>
   </main>
 
+  {% include "_palette.html" %}
+  <script src="/static/js/settings.js?v=20261112a"></script>
+  <script src="/static/js/theme.js?v=20261111a"></script>
+  <script src="/static/js/palette.js?v=20261112b"></script>
+  <script src="/static/js/i18n-data.js?v=20261113f"></script>
+  <script src="/static/js/i18n-auto.js?v=20261113d"></script>
+  <script src="/static/js/i18n.js?v=20261113h"></script>
+  <script src="/static/js/transitions.js?v=20261113a"></script>
   <script>
     (function () {
       "use strict";
@@ -103,6 +188,8 @@
 
         workspaceInput.value = state.workspace;
         modeInput.value = state.mode;
+        var fixtureInput = document.getElementById("home-fixture");
+        if (fixtureInput) { fixtureInput.value = state.mode === "demo" ? "1" : ""; }
         if (workspaceChip && ws) { workspaceChip.textContent = ws.dataset.value; }
 
         var selects = document.querySelectorAll("[data-select]");
@@ -114,15 +201,23 @@
           if (label) { label.textContent = chosen.dataset.value; }
         });
 
-        var params = new URLSearchParams({ workspace: state.workspace, mode: state.mode });
+        var params = new URLSearchParams({ workspace: state.workspace, mode: state.mode, new: "1" });
         if (state.mode === "demo") { params.set("fixture", "1"); }
-        if (cta) { cta.setAttribute("href", "/agent?" + params.toString()); }
+        if (cta) { cta.setAttribute("href", "/agent/new?" + params.toString()); }
       }
 
       var savedWs = read(WS_KEY);
       var savedMode = read(MODE_KEY);
       if (savedWs && find("workspace", savedWs)) { state.workspace = savedWs; }
       if (savedMode && find("mode", savedMode)) { state.mode = savedMode; }
+      var settings = null;
+      try { settings = JSON.parse(window.localStorage.getItem("br.settings.v1") || "{}"); } catch (error) { settings = null; }
+      if (!savedWs && settings && settings.defaultWorkspace && find("workspace", settings.defaultWorkspace)) {
+        state.workspace = settings.defaultWorkspace;
+      }
+      if (!savedMode && settings && settings.defaultMode && find("mode", settings.defaultMode)) {
+        state.mode = settings.defaultMode;
+      }
       apply();
 
       document.querySelectorAll("[data-select]").forEach(function (wrap) {
@@ -148,7 +243,7 @@
             trigger.setAttribute("aria-expanded", "false");
             apply();
             if (state.mode === "demo") {
-              window.location.href = cta ? cta.href : "/agent?fixture=1&mode=demo";
+              window.location.href = cta ? cta.href : "/agent/new?fixture=1&mode=demo&new=1";
             }
           });
         });
@@ -156,6 +251,14 @@
       document.addEventListener("click", function () {
         document.querySelectorAll(".ds-menu").forEach(function (m) { m.hidden = true; });
       });
+
+      var boot = document.getElementById("boot");
+      if (boot) {
+        try { sessionStorage.setItem("br.booted", "1"); } catch (e) {}
+        window.setTimeout(function () {
+          if (boot.parentNode) { boot.parentNode.removeChild(boot); }
+        }, 1900);
+      }
     })();
   </script>
 </body>

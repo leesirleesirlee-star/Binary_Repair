@@ -31,6 +31,10 @@ from app.backend import (
 )
 from app.evidence_domains import evidence_domain, scope_display
 from app.services.assistant_key_store import clear_key, key_status, save_key
+from app.services.code_repair import repair_code
+from app.services.connectors import connector_snapshot
+from app.services.history import HistoryConflict, HistoryError, HistoryStore
+from app.services.evaluation import evaluate as evaluate_evidence
 from app.services.assistant_llm import (
     ASSISTANT_MODE_ENV,
     assistant_status,
@@ -70,6 +74,19 @@ SESSION_TOKEN = _load_session_token()
 CSRF_TOKEN = hmac.new(SESSION_TOKEN.encode("utf-8"), b"gui-csrf", hashlib.sha256).hexdigest()
 SESSION_COOKIE = "br_session"
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
+for _extra_host in os.environ.get("BINARYREPAIR_ALLOWED_HOSTS", "").split(","):
+    if _extra_host.strip():
+        ALLOWED_HOSTS.add(_extra_host.strip().lower())
+
+
+def _host_allowed(host: str) -> bool:
+    """Local-only by default; explicit env opts in LAN/temporary tunnel hosts."""
+    host = (host or "").split(":")[0].strip().lower()
+    if host in ALLOWED_HOSTS:
+        return True
+    if os.environ.get("BINARYREPAIR_ALLOW_TUNNEL") == "1":
+        return any(host.endswith(suffix) for suffix in (".ngrok-free.app", ".ngrok-free.dev", ".ngrok.app", ".ngrok.dev", ".ngrok.io"))
+    return False
 
 _UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -85,6 +102,7 @@ templates.env.globals.update(
     value_labels_zh=i18n.VALUE_LABELS_ZH,
     route_names_zh=i18n.ROUTE_NAMES_ZH,
     csrf_token=CSRF_TOKEN,
+    nav_ui=load_ui_config,
     display_verdict=status.display_verdict,
     order_obligations=status.order_obligations,
 )
@@ -125,7 +143,7 @@ async def backend_error_handler(request: Request, exc: BackendError) -> JSONResp
 async def security_gate(request: Request, call_next):
     """Enforce the local-only session/CSRF security boundary."""
     host = (request.headers.get("host") or "").split(":")[0].strip().lower()
-    if host not in ALLOWED_HOSTS:
+    if not _host_allowed(host):
         return JSONResponse({"detail": "Local access only (host check failed)."}, status_code=403)
 
     path = request.url.path
@@ -134,7 +152,14 @@ async def security_gate(request: Request, call_next):
 
     token = request.query_params.get("token")
     if token and secrets.compare_digest(token, SESSION_TOKEN):
-        response = RedirectResponse(url=path or "/", status_code=303)
+        # Strip the token from the URL but keep every other query parameter
+        # (workspace / mode / q / new / fixture), otherwise a deep link would
+        # silently lose its intent on the one redirect after bootstrap.
+        kept = [(key, value) for key, value in request.query_params.multi_items() if key != "token"]
+        target = path or "/"
+        if kept:
+            target += "?" + urlencode(kept)
+        response = RedirectResponse(url=target, status_code=303)
         response.set_cookie(
             SESSION_COOKIE,
             SESSION_TOKEN,
@@ -162,7 +187,7 @@ async def security_gate(request: Request, call_next):
         origin = request.headers.get("origin")
         if origin:
             parsed = urlparse(origin)
-            if parsed.scheme != "http" or (parsed.hostname or "") not in ALLOWED_HOSTS:
+            if parsed.scheme not in {"http", "https"} or not _host_allowed(parsed.hostname or ""):
                 return JSONResponse(
                     {"detail": "Cross-origin request rejected."}, status_code=403
                 )
@@ -216,6 +241,7 @@ def _auth_required_page() -> str:
 async def index(request: Request):
     """Render the landing page."""
     ui = load_ui_config()
+    snapshot = connector_snapshot()
     return templates.TemplateResponse(
         request,
         "landing.html",
@@ -224,6 +250,12 @@ async def index(request: Request):
             "ui": ui,
             "default_workspace": resolve_workspace(ui, None),
             "default_mode": resolve_mode(ui, None),
+            "connector_strip": [
+                row for row in snapshot["connectors"]
+                if row["id"] in {"assistant", "controller", "ghidra", "angr", "frida", "plugins"}
+            ],
+            "connector_names": CONNECTOR_NAMES_ZH,
+            "connector_status": CONNECTOR_STATUS_ZH,
         },
     )
 
@@ -263,6 +295,7 @@ def _agent_context(
         "job_id": job_id,
         "fixture": fixture_mode,
         "backend_note": backend_description(BACKEND),
+        "ui": ui,
         "workspace": selected_workspace,
         "mode": selected_mode,
         "assistant": assistant_status(
@@ -270,6 +303,159 @@ def _agent_context(
             client_configured=client_from_env() is not None,
         ),
     }
+
+
+CONNECTOR_NAMES_ZH = {
+    "assistant": "计划模型",
+    "controller": "控制器",
+    "workspace": "工作区",
+    "plugins": "插件加载器",
+    "mcp": "MCP 桥",
+    "git": "Git 交付",
+    "webhook": "Webhook",
+    "artifacts": "产物归档",
+    "ghidra": "Ghidra",
+    "rizin": "Rizin / radare2",
+    "binutils": "GNU binutils",
+    "gdb": "GDB",
+    "qemu": "QEMU",
+    "frida": "Frida",
+    "angr": "angr",
+    "triton": "Triton",
+    "docker": "沙箱（Docker）",
+}
+CONNECTOR_DESCS_ZH = {
+    "assistant": "生成引导计划与模型补丁；没有 key 时使用确定性 planner。",
+    "controller": "GUI 读取任务快照、历史与契约的控制器来源。",
+    "workspace": "任务记录、服务端会话历史与本地数据的目录。",
+    "plugins": "从插件目录发现只读 JSON 清单，不执行插件代码。",
+    "mcp": "把工具调用交给 MCP 客户端的可选桥接点。",
+    "git": "把修复证据交付到可审阅的 Git 工作树。",
+    "webhook": "将运行与证据事件推送到操作者声明的地址。",
+    "artifacts": "导出证据包的可选外部目录。",
+    "ghidra": "无头反编译与符号恢复，为二进制修复提供伪代码。",
+    "rizin": "反汇编、函数恢复与二进制差分。",
+    "binutils": "objdump/readelf 静态证据，Route B 自检依赖它。",
+    "gdb": "会话调试与崩溃现场检查。",
+    "qemu": "跨架构用户态或系统级模拟，用于复跑与验证。",
+    "frida": "动态插桩与运行时 API 追踪。",
+    "angr": "符号执行与路径约束求解，用于探索可触发输入。",
+    "triton": "动态符号执行与污点分析。",
+    "docker": "在容器边界内运行不可信样本与工具。",
+}
+CONNECTOR_CATEGORY_ZH = {
+    "model": "模型与规划",
+    "analysis": "二进制分析",
+    "workflow": "工作流与交付",
+    "storage": "存储与运行时",
+    "plugin": "插件",
+}
+CONNECTOR_CATEGORY_DESC_ZH = {
+    "model": "计划生成与补丁建议；密钥只保存在服务端。",
+    "analysis": "从静态、符号、动态到模拟：修复前后都需要可复现证据。",
+    "workflow": "把修复接入任务、审阅、事件与沙箱边界。",
+    "storage": "任务、历史、证据包与产物的落点。",
+    "plugin": "声明式清单，只被发现与展示，不被执行。",
+}
+CONNECTOR_STATUS_ZH = {
+    "connected": "已连接",
+    "ready": "已就绪",
+    "unconfigured": "未配置",
+    "unavailable": "未检测到",
+}
+CONNECTOR_KIND_ZH = {
+    "llm": "模型",
+    "controller": "控制器",
+    "bridge": "桥接",
+    "delivery": "交付",
+    "event": "事件",
+    "runtime": "运行时",
+    "storage": "存储",
+    "workspace": "工作区",
+    "tool": "分析工具",
+    "plugin": "插件",
+}
+
+
+@app.get("/settings", response_class=HTMLResponse, name="settings_page")
+async def settings_page(request: Request):
+    """Local operator preferences; values stay in the browser."""
+    ui = load_ui_config()
+    snapshot = connector_snapshot()
+    return templates.TemplateResponse(
+        request,
+        "settings.html",
+        {
+            "ui": ui,
+            "workspace": resolve_workspace(ui, None),
+            "mode": resolve_mode(ui, None),
+            "connector_counts": snapshot["counts"],
+            "plugin_total": snapshot["counts"]["plugins"],
+            "demo": BACKEND_MODE == "mock",
+        },
+    )
+
+
+@app.get("/guide", response_class=HTMLResponse, name="guide_page")
+async def guide_page(request: Request):
+    """Full operator manual, linked from the fixed sidebar of every page."""
+    return templates.TemplateResponse(
+        request,
+        "guide.html",
+        {"demo": BACKEND_MODE == "mock"},
+    )
+
+
+@app.get("/methods", response_class=HTMLResponse, name="methods_page")
+async def methods_page(request: Request):
+    """Research-backed method map for binary repair and verification."""
+    return templates.TemplateResponse(
+        request,
+        "methods.html",
+        {"demo": BACKEND_MODE == "mock"},
+    )
+
+
+@app.get("/connectors", response_class=HTMLResponse, name="connectors_page")
+async def connectors_page(request: Request):
+    """Render the read-only connector inventory and the separate plugin area."""
+    snapshot = connector_snapshot()
+    loader = next((row for row in snapshot["connectors"] if row["id"] == "plugins"), None)
+    sections = []
+    for key in ("model", "analysis", "workflow", "storage"):
+        rows = [
+            row for row in snapshot["connectors"]
+            if row["category"] == key and row["id"] != "plugins"
+        ]
+        if rows:
+            sections.append({
+                "key": key,
+                "label": CONNECTOR_CATEGORY_ZH[key],
+                "desc": CONNECTOR_CATEGORY_DESC_ZH[key],
+                "rows": rows,
+            })
+    return templates.TemplateResponse(
+        request,
+        "connectors.html",
+        {
+            "snapshot": snapshot,
+            "sections": sections,
+            "loader": loader,
+            "names": CONNECTOR_NAMES_ZH,
+            "descs": CONNECTOR_DESCS_ZH,
+            "statuses": CONNECTOR_STATUS_ZH,
+            "categories": CONNECTOR_CATEGORY_ZH,
+            "category_desc": CONNECTOR_CATEGORY_DESC_ZH,
+            "kinds": CONNECTOR_KIND_ZH,
+            "demo": BACKEND_MODE == "mock",
+        },
+    )
+
+
+@app.get("/api/connectors", name="connectors_api")
+async def connectors_api():
+    """Expose the connector inventory as English ASCII JSON."""
+    return JSONResponse(connector_snapshot())
 
 
 @app.get("/agent", response_class=HTMLResponse, name="agent_index")
@@ -303,11 +489,19 @@ async def agent_index(
             target += "?" + urlencode(query)
         return RedirectResponse(url=target, status_code=307)
 
-    return templates.TemplateResponse(
-        request,
-        "agent_index.html",
-        _agent_context(fixture=fixture, workspace=workspace, mode=mode),
-    )
+    context = _agent_context(fixture=fixture, workspace=workspace, mode=mode)
+    snapshot = connector_snapshot()
+    try:
+        history_tasks = HistoryStore().count()
+    except Exception:  # noqa: BLE001 - a broken history DB must not break the page
+        history_tasks = 0
+    context.update({
+        "connector_counts": snapshot["counts"],
+        "plugin_total": snapshot["counts"]["plugins"],
+        "history_tasks": history_tasks,
+        "connector_names": CONNECTOR_NAMES_ZH,
+    })
+    return templates.TemplateResponse(request, "agent_index.html", context)
 
 
 @app.get("/agent/new", response_class=HTMLResponse, name="agent_new")
@@ -352,14 +546,15 @@ async def agent_console(
     )
 
 
-@app.get("/jobs/new", response_class=HTMLResponse, name="setup_page")
+@app.get("/jobs/new", name="setup_page")
 async def setup_page(request: Request):
-    """Render setup/review (upload + contract)."""
-    return templates.TemplateResponse(
-        request,
-        "setup.html",
-        {"demo": BACKEND_MODE == "mock", "job": None, "backend_note": backend_description(BACKEND)},
-    )
+    """Retired form intake: send old links to the one remaining intake.
+
+    The console is now the only way to create a repair job. A redirect keeps
+    bookmarks, scripts and the pre-cut landing links working without reviving a
+    second input path.
+    """
+    return RedirectResponse("/agent/new?new=1", status_code=303)
 
 
 @app.post("/jobs")
@@ -374,7 +569,7 @@ async def create_job(
     assumptions: str = Form(""),
     csrf: str = Form(""),
 ):
-    """Create a job from the upload form."""
+    """Create a job from the console's multipart payload."""
     _require_csrf(csrf)
     raw = await binary.read()
     if len(raw) > MAX_UPLOAD_BYTES:
@@ -713,6 +908,70 @@ async def job_status(job_id: str):
     return JSONResponse(BACKEND.get_snapshot(job_id))
 
 
+@app.get("/api/jobs/{job_id}/evaluation")
+async def job_evaluation(job_id: str):
+    """Read-only evidence observability scorecard.
+
+    This endpoint never derives a verdict. It reports coverage, missing
+    denominators and bottlenecks over whatever the controller returned.
+    """
+    try:
+        snapshot = BACKEND.get_snapshot(job_id)
+    except BackendError as exc:
+        return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+    except Exception as exc:  # noqa: BLE001 - backend boundary is untrusted
+        return JSONResponse({"detail": f"snapshot unavailable: {type(exc).__name__}"}, status_code=502)
+
+    attempts = {"available": False, "attempts": []}
+    getter = getattr(BACKEND, "get_attempts", None)
+    if getter is not None:
+        try:
+            payload = getter(job_id)
+            if isinstance(payload, dict):
+                attempts = payload
+        except Exception:  # noqa: BLE001
+            attempts = {"available": False, "attempts": []}
+
+    evidence_by_attempt: dict[str, object] = {}
+    evidence_getter = getattr(BACKEND, "get_attempt_evidence", None)
+    if evidence_getter is not None:
+        for item in attempts.get("attempts", []) if isinstance(attempts, dict) else []:
+            attempt_id = item.get("id") if isinstance(item, dict) else None
+            if not isinstance(attempt_id, str) or not attempt_id:
+                continue
+            try:
+                evidence = evidence_getter(attempt_id)
+            except Exception:  # noqa: BLE001
+                continue
+            if evidence:
+                evidence_by_attempt[attempt_id] = evidence
+
+    try:
+        artifacts = BACKEND.get_artifacts(job_id)
+    except Exception:  # noqa: BLE001
+        artifacts = []
+    artifact_rows: list[dict] = []
+    if isinstance(artifacts, dict):
+        for value in artifacts.values():
+            if isinstance(value, list):
+                artifact_rows.extend(item for item in value if isinstance(item, dict))
+    elif isinstance(artifacts, list):
+        artifact_rows = [item for item in artifacts if isinstance(item, dict)]
+    comparison_available = any(
+        str(item.get("role") or "") == "behavior_comparison" for item in artifact_rows
+    )
+
+    payload = evaluate_evidence(
+        snapshot,
+        attempts=attempts if isinstance(attempts, dict) else None,
+        artifacts=artifacts,
+        evidence_by_attempt=evidence_by_attempt,
+        comparison_available=comparison_available,
+    )
+    payload["available"] = True
+    return JSONResponse(payload)
+
+
 @app.get("/api/jobs/{job_id}/attempts")
 async def job_attempts(job_id: str):
     """Proxy M1's per-attempt history.
@@ -819,6 +1078,86 @@ async def assistant_plan(request: Request) -> JSONResponse:
     return JSONResponse({"plan": plan})
 
 
+@app.delete("/api/history")
+async def history_clear_all(request: Request) -> JSONResponse:
+    """Clear every server-side task/draft conversation (settings only)."""
+    _require_csrf(request.headers.get("x-csrf-token", ""))
+    return JSONResponse({"deleted": HistoryStore().clear_all()})
+
+
+@app.delete("/api/history/{scope}")
+async def history_delete(scope: str, request: Request) -> JSONResponse:
+    """Clear one task/draft conversation."""
+    _require_csrf(request.headers.get("x-csrf-token", ""))
+    try:
+        payload = HistoryStore().delete(scope)
+    except HistoryError:
+        raise HTTPException(status_code=404, detail="unknown history scope")
+    return JSONResponse(payload)
+
+
+@app.get("/api/history/{scope}")
+async def history_get(scope: str) -> JSONResponse:
+    """Read one task's server-side conversation history."""
+    try:
+        payload = HistoryStore().load(scope)
+    except HistoryError:
+        raise HTTPException(status_code=404, detail="unknown history scope")
+    return JSONResponse(payload, headers={"Cache-Control": "no-store"})
+
+
+@app.put("/api/history/{scope}")
+async def history_put(scope: str, request: Request) -> JSONResponse:
+    """Replace one task's history with the browser's current entries."""
+    _require_csrf(request.headers.get("x-csrf-token", ""))
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse({"detail": "JSON body required."}, status_code=422)
+    if not isinstance(body, dict):
+        return JSONResponse({"detail": "JSON object required."}, status_code=422)
+    generation = body.get("generation")
+    if generation is not None and (not isinstance(generation, int) or isinstance(generation, bool)):
+        return JSONResponse({"detail": "'generation' must be an integer."}, status_code=422)
+    try:
+        payload = HistoryStore().save(scope, body.get("entries"), generation)
+    except HistoryConflict as exc:
+        return JSONResponse({"detail": str(exc), "generation": HistoryStore().load(scope)["generation"]},
+                            status_code=409)
+    except HistoryError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
+    return JSONResponse(payload, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/code/repair")
+async def code_repair_route(request: Request) -> JSONResponse:
+    """Turn a pasted snippet into a static, reviewable repair suggestion.
+
+    The code is never executed. With a provider key the model proposes the
+    patch; without one, or on any model failure, deterministic rules answer.
+    """
+    _require_csrf(request.headers.get("x-csrf-token", ""))
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse(
+            {"detail": "JSON body required."}, status_code=422
+        )
+    if not isinstance(body, dict):
+        return JSONResponse({"detail": "JSON object required."}, status_code=422)
+    code = body.get("code")
+    language = body.get("language")
+    if not isinstance(code, str) or not code.strip():
+        return JSONResponse({"detail": "'code' is required."}, status_code=422)
+    if language is not None and not isinstance(language, str):
+        return JSONResponse({"detail": "'language' must be a string."}, status_code=422)
+    try:
+        result = repair_code(code, language, client=client_from_env())
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
+    return JSONResponse({"repair": result})
+
+
 @app.get("/api/assistant/key")
 async def assistant_key_status() -> JSONResponse:
     """Return masked key status; never return the key itself."""
@@ -842,6 +1181,9 @@ async def assistant_key_save(request: Request) -> JSONResponse:
     candidate = body.get("key")
     if not isinstance(candidate, str) or not candidate.strip():
         return JSONResponse({"detail": "key is required."}, status_code=422)
+    username = body.get("username")
+    if not isinstance(username, str) or not username.strip():
+        return JSONResponse({"detail": "username is required."}, status_code=422)
     current = key_status()
     if current["source"] == "environment":
         return JSONResponse(
@@ -849,7 +1191,7 @@ async def assistant_key_save(request: Request) -> JSONResponse:
             status_code=409,
         )
     try:
-        saved = save_key(candidate)
+        saved = save_key(candidate, username)
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=422)
     except OSError:

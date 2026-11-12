@@ -1,0 +1,351 @@
+{% extends "base.html" %}
+
+{% block title %}连接器与插件{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/css/connectors.css?v=20261112d">
+{% endblock %}
+
+{% block content %}
+<div class="connectors" data-testid="connectors-page">
+  <header class="connectors-head">
+    <div>
+      <p class="connectors-eyebrow">INTEGRATIONS / TOOLCHAIN</p>
+      <h1 class="ds-page-title">连接器与插件</h1>
+      <p class="ds-page-sub">
+        连接器是运行时的分析、模型与交付通道；插件是只读的声明式清单。两者分区展示、互不混放。
+        本页只报告本机配置：不主动连接远端、不显示凭据、不执行插件代码。
+      </p>
+    </div>
+    <div class="connectors-actions">
+      <a class="ds-btn" href="/api/connectors" target="_blank" rel="noopener">查看 JSON</a>
+      <a class="ds-btn" href="/connectors">刷新状态</a>
+    </div>
+  </header>
+
+  <section class="connector-stats" aria-label="接入点摘要">
+    <div class="connector-stat">
+      <strong>{{ snapshot.counts.total }}</strong>
+      <span>接入点</span>
+    </div>
+    <div class="connector-stat is-ready">
+      <strong>{{ snapshot.counts.ready }}</strong>
+      <span>已就绪</span>
+    </div>
+    <div class="connector-stat is-wait">
+      <strong>{{ snapshot.counts.needs_setup }}</strong>
+      <span>待配置 / 待安装</span>
+    </div>
+    <div class="connector-stat">
+      <strong>{{ snapshot.counts.plugins }}</strong>
+      <span>插件清单</span>
+    </div>
+    <div class="connector-stat connector-stat-wide">
+      <span class="connector-stat-label">当前后端</span>
+      <strong class="connector-stat-value">{{ snapshot.backend }}</strong>
+    </div>
+  </section>
+
+  <section class="connector-steps" aria-labelledby="connector-steps-title">
+    <div class="connector-steps-head">
+      <h2 id="connector-steps-title" class="connector-section-title">接入四步</h2>
+      <p>状态是「本机是否具备条件」，不是「远端已经连通」。真实调用仍以各页面请求结果为准。</p>
+    </div>
+    <ol class="connector-step-list">
+      <li><span>01</span><div><strong>选择接入点</strong><p>按类别找到需要的分析工具、模型或交付通道。</p></div></li>
+      <li><span>02</span><div><strong>准备环境</strong><p>安装命令到 PATH、安装 Python 模块，或设置环境变量。</p></div></li>
+      <li><span>03</span><div><strong>重启 GUI</strong><p>在项目目录执行 <code>./start-gui.sh</code>，让新环境生效。</p></div></li>
+      <li><span>04</span><div><strong>刷新并核对</strong><p>回到本页刷新；状态变化后，从对应页面发起真实请求。</p></div></li>
+    </ol>
+  </section>
+
+  <nav class="connector-nav" aria-label="页面锚点">
+    <a href="#connectors">连接器</a>
+    <a href="#plugins">插件</a>
+    <a href="#connector-api">API 与文档</a>
+    <span class="connector-filter" role="group" aria-label="按状态筛选">
+      <button type="button" class="is-active" data-filter="all">全部</button>
+      <button type="button" data-filter="ready">已就绪</button>
+      <button type="button" data-filter="setup">待配置</button>
+    </span>
+  </nav>
+
+  <section id="connectors" class="connector-section" aria-labelledby="connectors-title">
+    <header class="connector-section-head">
+      <div>
+        <p class="connectors-eyebrow">CONNECTORS</p>
+        <h2 id="connectors-title" class="connector-section-title">连接器</h2>
+        <p class="connector-section-copy">
+          按模型、分析、工作流与存储分组。每张卡都给出状态、环境变量、接入步骤和官方文档入口。
+        </p>
+      </div>
+      <span class="connector-section-count">{{ sections|map(attribute='rows')|map('length')|sum }} 个</span>
+    </header>
+
+    {% for section in sections %}
+    <section class="connector-group" aria-labelledby="connector-group-{{ section.key }}">
+      <header class="connector-group-head">
+        <div>
+          <h3 id="connector-group-{{ section.key }}" class="connector-group-title">{{ section.label }}</h3>
+          <p>{{ section.desc }}</p>
+        </div>
+        <span class="connector-group-count">{{ section.rows|length }}</span>
+      </header>
+
+      <div class="connector-grid">
+        {% for connector in section.rows %}
+        <article
+          id="connector-{{ connector.id }}"
+          class="connector-card"
+          data-kind="{{ connector.kind }}"
+          data-category="{{ section.key }}"
+          data-status="{{ connector.status }}"
+          data-testid="connector-{{ connector.id }}"
+        >
+          <div class="connector-top">
+            <span class="connector-kind">{{ kinds.get(connector.kind, connector.kind) }}</span>
+            <span class="connector-status is-{{ connector.status }}">
+              <i aria-hidden="true"></i>{{ statuses.get(connector.status, connector.status) }}
+            </span>
+          </div>
+
+          <div class="connector-name-row">
+            <h4 class="connector-name">{{ names.get(connector.id, connector.name) }}</h4>
+            {% if connector.docs_url %}
+            <a class="connector-doc-link" href="{{ connector.docs_url }}" target="_blank" rel="noopener noreferrer"
+               aria-label="{{ names.get(connector.id, connector.name) }} 官方文档">文档 ↗</a>
+            {% endif %}
+          </div>
+          <p class="connector-desc">{{ descs.get(connector.id, connector.description) }}</p>
+          <p class="connector-detail">{{ connector.detail }}</p>
+
+          {% if connector.env %}
+          <div class="connector-env">
+            {% for key in connector.env %}
+            <button type="button" class="connector-env-chip" data-copy="{{ key }}" title="复制变量名">
+              <code>{{ key }}</code>
+            </button>
+            {% endfor %}
+          </div>
+          {% endif %}
+
+          <details class="connector-guide">
+            <summary>接入步骤</summary>
+            <ol>
+              {% if connector.setup == "builtin" %}
+              <li>内置连接，无需安装；状态随后端模式变化。</li>
+              <li>在任务页发起请求后，以该页面的回执为准。</li>
+              {% elif connector.setup == "python" %}
+              <li>在 GUI 的虚拟环境安装：<code>.venv/bin/pip install {{ connector.hint }}</code></li>
+              <li>重启 <code>./start-gui.sh</code>，再刷新本页确认状态。</li>
+              <li>从任务页发起分析；页面不会在这里执行工具。</li>
+              {% elif connector.setup == "binary" %}
+              <li>安装工具并在 PATH 中提供 <code>{{ connector.hint or connector.name }}</code>。</li>
+              <li>用 <code>which {{ connector.hint or connector.name }}</code> 验证，然后刷新本页。</li>
+              <li>需要样本时，把二进制上传到新建修复流程。</li>
+              {% elif connector.setup == "path" %}
+              <li>准备目录，并设置下方环境变量指向它。</li>
+              <li>重启 <code>./start-gui.sh</code>，再刷新本页。</li>
+              {% elif connector.setup == "dir" %}
+              <li>把符合协议的 JSON 清单放进 <code>{{ connector.hint }}/</code> 目录。</li>
+              <li>刷新本页；清单只被读取和展示，不会被执行。</li>
+              {% else %}
+              <li>设置下方环境变量（shell 中用 <code>export KEY=...</code>）。</li>
+              <li>重启 <code>./start-gui.sh</code>，再刷新本页确认状态。</li>
+              <li>状态为「已就绪」后，从对应页面发起真实请求。</li>
+              {% endif %}
+            </ol>
+            {% if connector.docs_url %}
+            <a class="connector-guide-link" href="{{ connector.docs_url }}" target="_blank" rel="noopener noreferrer">打开官方文档 ↗</a>
+            {% endif %}
+          </details>
+        </article>
+        {% endfor %}
+      </div>
+    </section>
+    {% endfor %}
+  </section>
+
+  <section id="plugins" class="plugin-section" aria-labelledby="plugins-title">
+    <header class="connector-section-head">
+      <div>
+        <p class="connectors-eyebrow">PLUGINS / DECLARATIVE</p>
+        <h2 id="plugins-title" class="connector-section-title">插件（与连接器分开）</h2>
+        <p class="connector-section-copy">
+          插件不是运行时连接器：它们是放在插件目录里的 JSON 清单，只被读取、校验和展示。
+          当前没有加载器执行插件代码；清单里的 <code>enabled</code> 只是声明，不代表已激活。
+        </p>
+      </div>
+      <span class="connector-section-count">{{ snapshot.plugins|length }} 个清单</span>
+    </header>
+
+    <div class="plugin-panel" data-testid="plugin-panel">
+      <div class="plugin-loader">
+        <div>
+          <h3 class="plugin-title">插件加载器</h3>
+          <p class="plugin-copy">
+            发现目录：<code>{{ loader.hint }}/</code>（{{ "由 BINARYREPAIR_PLUGIN_DIR 覆盖" if snapshot.plugin_dir_source == "env" else "默认目录" }}）。
+            清单只接受 ASCII 的 id / name / kind / description；可选的 <code>docs_url</code> 必须是 http(s) 链接。
+          </p>
+          {% if loader %}
+          <p class="plugin-loader-status">
+            <span class="connector-status is-{{ loader.status }}"><i aria-hidden="true"></i>{{ statuses.get(loader.status, loader.status) }}</span>
+            <span class="plugin-loader-detail">{{ loader.detail }}</span>
+          </p>
+          {% endif %}
+          <p class="plugin-links">
+            <a href="/api/connectors" target="_blank" rel="noopener">查看连接器 JSON ↗</a>
+            <a href="https://github.com/chenfanaichifan/binary-repair" target="_blank" rel="noopener noreferrer">仓库文档 ↗</a>
+            <a href="#connector-api">插件协议说明 ↓</a>
+          </p>
+        </div>
+        <div class="plugin-loader-actions">
+          <button type="button" class="ds-btn" data-copy-schema>复制清单模板</button>
+          <a class="ds-btn ghost" href="#plugins">刷新清单</a>
+        </div>
+      </div>
+
+      {% if snapshot.plugins %}
+      <div class="plugin-grid">
+        {% for plugin in snapshot.plugins %}
+        <article class="plugin-card" data-testid="plugin-{{ plugin.id }}">
+          <div class="connector-top">
+            <span class="connector-kind">{{ plugin.kind }}</span>
+            <span class="plugin-state {{ 'is-on' if plugin.enabled else 'is-example' }}">
+              {{ "已声明启用" if plugin.enabled else "示例 · 未启用" }}
+            </span>
+          </div>
+          <div class="connector-name-row">
+            <h3 class="plugin-card-title">{{ plugin.name }}</h3>
+            {% if plugin.docs_url %}
+            <a class="connector-doc-link" href="{{ plugin.docs_url }}" target="_blank" rel="noopener noreferrer">文档 ↗</a>
+            {% endif %}
+          </div>
+          <p class="plugin-card-desc">{{ plugin.description }}</p>
+          <details class="plugin-detail">
+            <summary>查看清单字段</summary>
+            <dl>
+              <dt>id</dt><dd><code>{{ plugin.id }}</code></dd>
+              <dt>kind</dt><dd><code>{{ plugin.kind }}</code></dd>
+              <dt>file</dt><dd><code>{{ loader.hint }}/{{ plugin.file }}</code></dd>
+              <dt>enabled</dt><dd><code>{{ "true" if plugin.enabled else "false" }}</code></dd>
+              {% if plugin.docs_url %}<dt>docs_url</dt><dd><code>{{ plugin.docs_url }}</code></dd>{% endif %}
+            </dl>
+          </details>
+        </article>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="plugin-empty">
+        还没有插件清单。把下面的模板保存为 <code>{{ loader.hint }}/my-plugin.json</code>，刷新本页即可看到。
+      </p>
+      {% endif %}
+
+      {% if snapshot.warnings %}
+      <ul class="plugin-warnings" aria-label="清单警告">
+        {% for warning in snapshot.warnings %}<li>{{ warning }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+
+      <div class="plugin-schema-panel">
+        <div>
+          <h3 class="plugin-title">清单模板</h3>
+          <p class="plugin-copy">四个必填字段 + 可选的 docs_url / enabled。模板只读，不会被本页写入。</p>
+        </div>
+        <pre class="plugin-schema"><code id="plugin-schema-code">{
+  "id": "example",
+  "name": "Example extension",
+  "kind": "analysis",
+  "description": "One ASCII sentence.",
+  "enabled": false,
+  "docs_url": "https://example.com/"
+}</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="connector-api" class="connector-docs" aria-labelledby="connector-docs-title">
+    <h2 id="connector-docs-title" class="connector-section-title">API 与文档</h2>
+    <div class="connector-docs-grid">
+      <a class="connector-doc-card" href="/api/connectors" target="_blank" rel="noopener">
+        <strong>GET /api/connectors</strong>
+        <span>英文 ASCII JSON：连接器、插件清单、计数、警告。</span>
+      </a>
+      <a class="connector-doc-card" href="https://github.com/chenfanaichifan/binary-repair" target="_blank" rel="noopener noreferrer">
+        <strong>插件协议 v1</strong>
+        <span>id / name / kind / description / enabled / docs_url；清单绝不执行。</span>
+      </a>
+      <a class="connector-doc-card" href="https://cwe.mitre.org/" target="_blank" rel="noopener noreferrer">
+        <strong>CWE 漏洞分类</strong>
+        <span>代码修复卡片里的 CWE 链接来自这里，便于统一复核口径。</span>
+      </a>
+      <a class="connector-doc-card" href="https://owasp.org/www-project-top-ten/" target="_blank" rel="noopener noreferrer">
+        <strong>OWASP Top 10</strong>
+        <span>把代码级问题映射到常见风险类别与修复建议。</span>
+      </a>
+    </div>
+  </section>
+
+  <p class="connectors-foot">
+    连接器状态来自本机环境、PATH 与已安装模块；它是「是否具备接入条件」，不是远端可用性承诺。
+    插件清单只读，不会被加载执行。
+  </p>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  function copy(value, button) {
+    var done = function () {
+      if (!button) return;
+      var oldTitle = button.getAttribute("title") || "";
+      button.classList.add("is-copied");
+      button.setAttribute("title", "已复制");
+      window.setTimeout(function () {
+        button.classList.remove("is-copied");
+        button.setAttribute("title", oldTitle);
+      }, 1200);
+    };
+    var fallback = function () {
+      var area = document.createElement("textarea");
+      area.value = value;
+      area.setAttribute("readonly", "readonly");
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      document.body.appendChild(area);
+      area.select();
+      try { document.execCommand("copy"); } catch (error) { /* ignore */ }
+      document.body.removeChild(area);
+      done();
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(value).then(done, fallback);
+    } else { fallback(); }
+  }
+
+  document.querySelectorAll("[data-copy]").forEach(function (button) {
+    button.addEventListener("click", function () { copy(button.dataset.copy, button); });
+  });
+  var schema = document.getElementById("plugin-schema-code");
+  document.querySelectorAll("[data-copy-schema]").forEach(function (button) {
+    button.addEventListener("click", function () { copy(schema ? schema.textContent : "", button); });
+  });
+
+  var filters = document.querySelectorAll("[data-filter]");
+  var cards = document.querySelectorAll(".connector-card");
+  filters.forEach(function (button) {
+    button.addEventListener("click", function () {
+      var wanted = button.dataset.filter;
+      filters.forEach(function (other) { other.classList.toggle("is-active", other === button); });
+      cards.forEach(function (card) {
+        var state = card.dataset.status;
+        var show = wanted === "all" ||
+          (wanted === "ready" && (state === "ready" || state === "connected")) ||
+          (wanted === "setup" && state !== "ready" && state !== "connected");
+        card.hidden = !show;
+      });
+    });
+  });
+})();
+</script>
+{% endblock %}

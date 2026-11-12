@@ -1,0 +1,144 @@
+{
+  "generated_at": "2026-11-12T05:55:36Z",
+  "scope": "static rules + read-only mock evaluation; no binary execution",
+  "code_repair": {
+    "samples": 5,
+    "detected": 3,
+    "patch_generated": 2,
+    "rows": [
+      {
+        "sample": "py-shell",
+        "expected_cwe": "CWE-78",
+        "detected_cwe": "CWE-78",
+        "detected": true,
+        "patch_generated": true,
+        "mode": "rule",
+        "p50_ms": 0.045,
+        "p95_ms": 0.108
+      },
+      {
+        "sample": "py-eval",
+        "expected_cwe": "CWE-95",
+        "detected_cwe": "CWE-95",
+        "detected": true,
+        "patch_generated": false,
+        "mode": "rule",
+        "p50_ms": 0.023,
+        "p95_ms": 0.029
+      },
+      {
+        "sample": "c-strcpy",
+        "expected_cwe": "CWE-121",
+        "detected_cwe": "CWE-121",
+        "detected": true,
+        "patch_generated": true,
+        "mode": "rule",
+        "p50_ms": 0.032,
+        "p95_ms": 0.04
+      },
+      {
+        "sample": "py-sqli",
+        "expected_cwe": "CWE-89",
+        "detected_cwe": "",
+        "detected": false,
+        "patch_generated": false,
+        "mode": "rule",
+        "p50_ms": 0.008,
+        "p95_ms": 0.009
+      },
+      {
+        "sample": "py-path",
+        "expected_cwe": "CWE-22",
+        "detected_cwe": "",
+        "detected": false,
+        "patch_generated": false,
+        "mode": "rule",
+        "p50_ms": 0.006,
+        "p95_ms": 0.007
+      }
+    ]
+  },
+  "evidence_evaluation": {
+    "iterations": 80,
+    "p50_ms": 0.016,
+    "p95_ms": 0.018,
+    "observability_index": 5.8,
+    "not_verdict": true,
+    "bottlenecks": [
+      "no_obligations",
+      "no_artifacts",
+      "no_comparison",
+      "no_verdict"
+    ]
+  },
+  "binary_artifacts": {
+    "packages": [
+      {
+        "package": "package",
+        "hashes_verified": true,
+        "audit_pass": null,
+        "audit_checks": {},
+        "evidence_layers": [],
+        "tests": [
+          {
+            "file": "valid.json",
+            "cases": 1
+          }
+        ],
+        "original_sha256": "c9c2632e792c5acd0311cc3a5e4eb3fde538eb05d0de9c6601711e84b7b123c9",
+        "candidate_sha256": "46d16e997bdfbb87fbd9c1d6f09443a7907b11b2b37118f5c773087a0d91fcd0"
+      },
+      {
+        "package": "p1-routea-package-2026-11-07",
+        "hashes_verified": true,
+        "audit_pass": true,
+        "audit_checks": {
+          "changed_inside_intervals": true,
+          "entry_unchanged": true,
+          "no_wx_segment": true,
+          "readelf_available": false,
+          "relocations_recorded": true,
+          "same_file_size": true
+        },
+        "evidence_layers": [
+          "v1",
+          "v2",
+          "v5"
+        ],
+        "tests": [
+          {
+            "file": "valid.json",
+            "cases": 1
+          }
+        ],
+        "original_sha256": "c9c2632e792c5acd0311cc3a5e4eb3fde538eb05d0de9c6601711e84b7b123c9",
+        "candidate_sha256": "2a96b1083f23a0885ef6152dee39c48648d496a7a026e37ccfb31382c412970e"
+      },
+      {
+        "package": "p1-routea-v4-input-2026-11-07",
+        "hashes_verified": true,
+        "audit_pass": null,
+        "audit_checks": {},
+        "evidence_layers": [],
+        "tests": [
+          {
+            "file": "valid.json",
+            "cases": 1
+          }
+        ],
+        "original_sha256": "c9c2632e792c5acd0311cc3a5e4eb3fde538eb05d0de9c6601711e84b7b123c9",
+        "candidate_sha256": "2a96b1083f23a0885ef6152dee39c48648d496a7a026e37ccfb31382c412970e"
+      }
+    ],
+    "status_files": 1,
+    "phases": {
+      "generating": 1
+    },
+    "note": "candidate packages are verified by hash; phases are reported verbatim; no new binary execution"
+  },
+  "limitations": [
+    "Rule engine covers known patterns only; 3/5 synthetic cases is not a real-world recall claim.",
+    "No binary was executed in this probe; binary evidence is artifact metadata only.",
+    "Observability index is coverage, never an acceptance verdict."
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "id": "sarif-report",
+  "name": "SARIF report writer",
+  "kind": "reporter",
+  "description": "Describes exporting findings as SARIF for code scanning dashboards.",
+  "enabled": false,
+  "docs_url": "https://sarifweb.azurewebsites.net/"
+}

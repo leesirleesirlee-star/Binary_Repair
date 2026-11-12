@@ -1,89 +1,202 @@
 {% extends "base.html" %}
 
-{% block title %}修复任务{% endblock %}
+{% block title %}修复工作台{% endblock %}
 
 {% block head %}
-<style>
-  .job-home { max-width: 1040px; }
-  .job-home-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-    gap: 12px;
-    margin-top: 18px;
-  }
-  .job-start {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    padding: 20px;
-    border: 1px solid var(--ds-border-strong);
-    border-radius: 14px;
-    background: var(--ds-accent-soft);
-    color: var(--ds-text);
-  }
-  .job-start:hover { text-decoration: none; box-shadow: var(--ds-shadow); }
-  .job-start strong { font-size: 15px; }
-  .job-start span { font-size: 12.5px; color: var(--ds-text-2); }
-  .job-card {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    padding: 16px;
-    border: 1px solid var(--ds-border);
-    border-radius: 14px;
-    background: #fff;
-    color: var(--ds-text);
-    min-height: 96px;
-  }
-  .job-card:hover { text-decoration: none; border-color: var(--ds-border-strong); box-shadow: var(--ds-shadow); }
-  .job-card-title { font-size: 14px; font-weight: 600; }
-  .job-card-id { font-size: 11.5px; color: var(--ds-muted); word-break: break-all; }
-  .job-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; }
-  .job-card-phase { font-size: 12px; color: var(--ds-text-2); }
-  .job-card-phase[data-state="missing"], .job-card-phase[data-state="unreachable"] { color: var(--ds-muted); }
-  .job-card-time { font-size: 11.5px; color: var(--ds-faint); }
-  .job-home-empty {
-    margin-top: 18px;
-    padding: 18px;
-    border: 1px dashed var(--ds-border-strong);
-    border-radius: 14px;
-    color: var(--ds-muted);
-    font-size: 13px;
-  }
-  .job-home-note { margin-top: 14px; font-size: 12px; color: var(--ds-muted); }
-</style>
+<link rel="stylesheet" href="/static/css/workbench.css?v=20261113d">
 {% endblock %}
 
 {% block content %}
-<section class="job-home">
-  <h1 class="ds-page-title">修复任务</h1>
-  <p class="ds-page-sub">
-    每次修复是一个独立会话：有自己的对话、操作记录和结果。任务列表保存在本机浏览器，
-    状态逐条向 controller 核对。
-  </p>
+<div class="wb" data-testid="workbench">
+  <header class="wb-hero">
+    <div class="wb-hero-copy">
+      <p class="wb-eyebrow">REPAIR WORKBENCH</p>
+      <h1 class="ds-page-title">修复工作台</h1>
+      <p class="ds-page-sub">
+        从一段带漏洞的代码，或一个待修复的二进制开始。对话、工具证据与验收结论分开保存：
+        助手只做引导与解释，创建任务和开始执行由你点击确认。
+      </p>
+      <div class="wb-launch" data-testid="launch-card">
+        <div class="wb-launch-tabs" role="tablist" aria-label="选择会话模式">
+          <button type="button" class="is-active" data-launch-mode="live" role="tab" aria-selected="true">
+            真实任务
+          </button>
+          <button type="button" data-launch-mode="demo" role="tab" aria-selected="false">
+            演示会话
+          </button>
+        </div>
+        <div class="wb-launch-body">
+          <div class="wb-launch-copy">
+            <p class="wb-launch-kicker" id="wb-launch-kicker">REAL SESSION</p>
+            <h2 id="wb-launch-title">新建一次真实修复</h2>
+            <p id="wb-launch-desc">
+              对话、历史与任务结果都写入本机服务端；创建任务、开始执行由你确认。
+            </p>
+          </div>
+          <a class="wb-cta" id="wb-launch-cta" href="/agent/new?new=1" data-testid="agent-start-new">
+            ＋ 新建任务 <span aria-hidden="true">→</span>
+          </a>
+        </div>
+        <div class="wb-launch-demo" id="wb-launch-demo" hidden>
+          <span class="wb-launch-demo-label">演示场景</span>
+          <div class="wb-scenario-tabs" role="group" aria-label="演示场景">
+            <button type="button" class="is-active" data-scenario="fresh">全新</button>
+            <button type="button" data-scenario="pending">待执行</button>
+            <button type="button" data-scenario="success">成功</button>
+            <button type="button" data-scenario="failure">失败</button>
+          </div>
+        </div>
+        <details class="wb-launch-diff">
+          <summary>真实任务与演示会话有什么区别？</summary>
+          <div class="wb-launch-diff-grid">
+            <p><strong>真实任务</strong>：会创建任务、写入服务端历史，可上传样本并走完整引导；当前 mock 后端仍使用合成数据。</p>
+            <p><strong>演示会话</strong>：只读 fixture，不创建任务、不执行真实修复；适合快速查看成功/失败/待执行界面。</p>
+          </div>
+        </details>
+      </div>
+      <p class="wb-hero-hint">
+        也可以直接粘贴 <code>shell=True</code>、<code>strcpy</code>、<code>eval</code> 等代码片段，
+        对话里会给出可复核的静态补丁。
+      </p>
+    </div>
+    <div class="wb-hero-art" aria-hidden="true">
+      <i class="wb-ring wb-ring-a"></i>
+      <i class="wb-ring wb-ring-b"></i>
+      <i class="wb-ring wb-ring-c"></i>
+      <span class="wb-art-core"></span>
+      <span class="wb-art-label">V0 — V5</span>
+    </div>
+  </header>
 
-  <div class="job-home-grid">
-    <a class="job-start" href="/agent/new" data-testid="agent-start-new">
-      <strong>＋ 新建修复任务</strong>
-      <span>按「样本 → 缺陷 → 用例 → 契约 → 复核」对话式建单。</span>
-    </a>
-    <a class="job-start" href="/jobs/new" data-testid="agent-start-form">
-      <strong>用表单创建</strong>
-      <span>一次性填完上传与契约，适合已有完整材料时使用。</span>
-    </a>
-  </div>
+  <section class="wb-stats" aria-label="工作台摘要">
+    <div class="wb-stat">
+      <strong id="wb-stat-local">—</strong>
+      <span>本机任务</span>
+    </div>
+    <div class="wb-stat">
+      <strong>{{ history_tasks }}</strong>
+      <span>服务端会话</span>
+    </div>
+    <div class="wb-stat">
+      <strong>{{ connector_counts.ready }}<em>/{{ connector_counts.total }}</em></strong>
+      <span>连接器就绪</span>
+    </div>
+    <div class="wb-stat">
+      <strong>{{ plugin_total }}</strong>
+      <span>插件清单</span>
+    </div>
+  </section>
 
-  <h2 class="agent-panel-title" style="margin-top: 28px;">本机任务</h2>
-  <div id="agent-job-cards" class="job-home-grid" data-testid="agent-job-cards">
-    <div class="job-home-empty" data-testid="agent-job-cards-empty">还没有本机任务记录。</div>
-  </div>
+  <section class="wb-section" aria-labelledby="wb-quick-title">
+    <header class="wb-section-head">
+      <div>
+        <p class="wb-eyebrow">START</p>
+        <h2 id="wb-quick-title">从这里开始</h2>
+      </div>
+    </header>
+    <div class="wb-quick">
+      <a class="wb-quick-card is-code" href="/agent/new?new=1">
+        <span class="wb-quick-num">01</span>
+        <h3>粘贴代码，直接修</h3>
+        <p>把带漏洞的源码粘进对话。规则或模型给出问题列表、修复补丁、差异与 CWE 解释。</p>
+        <span class="wb-quick-link">在对话中粘贴 <span aria-hidden="true">→</span></span>
+      </a>
+      <a class="wb-quick-card is-binary" href="/agent/new?new=1">
+        <span class="wb-quick-num">02</span>
+        <h3>二进制修复</h3>
+        <p>样本 → 缺陷 → 用例 → 契约 → 复核。静态证据、候选补丁与验证结果各自留痕。</p>
+        <span class="wb-quick-link">新建任务 <span aria-hidden="true">→</span></span>
+      </a>
+      <a class="wb-quick-card" href="/connectors">
+        <span class="wb-quick-num">03</span>
+        <h3>接入工具链</h3>
+        <p>{{ connector_counts.ready }} / {{ connector_counts.total }} 个接入点已就绪；
+           {{ plugin_total }} 个声明式插件清单。Ghidra、angr、Frida、QEMU 等按需启用。</p>
+        <span class="wb-quick-link">连接器与插件 <span aria-hidden="true">→</span></span>
+      </a>
+    </div>
+  </section>
 
-  <p class="job-home-note">
-    列表按本浏览器记录排列，不代表 controller 上的全部任务。未在此浏览器打开过的任务，
-    仍可通过 <code>/agent/&lt;任务ID&gt;</code> 直接打开并加入列表。服务端全量列表需 controller
-    提供 <code>GET /api/jobs</code>。
-  </p>
-</section>
+  <section class="wb-section" aria-labelledby="wb-jobs-title">
+    <header class="wb-section-head">
+      <div>
+        <p class="wb-eyebrow">RECENT</p>
+        <h2 id="wb-jobs-title">最近修复任务</h2>
+      </div>
+      <span class="wb-section-meta">任务列表保存在本机浏览器；对话已同步服务端</span>
+    </header>
+    <div id="agent-job-cards" class="job-home-grid" data-testid="agent-job-cards">
+      <div class="wb-empty" data-testid="agent-job-cards-empty">
+        <strong>还没有本机任务</strong>
+        <p>先粘贴一段代码，或从上方「新建任务」开始。对话会实时写入服务端历史。</p>
+      </div>
+    </div>
+    <p class="wb-note">
+      列表按本浏览器记录排列，不代表 controller 上的全部任务。未在此浏览器打开过的任务，
+      仍可通过 <code>/agent/&lt;任务ID&gt;</code> 直接打开并加入列表。
+      「服务端会话」统计的是已经写入服务端的任务数量。
+    </p>
+  </section>
+
+  <section class="wb-section" aria-labelledby="wb-methods-title">
+    <header class="wb-section-head">
+      <div>
+        <p class="wb-eyebrow">METHODS / TOOLCHAIN</p>
+        <h2 id="wb-methods-title">方法与工具</h2>
+      </div>
+      <a class="wb-section-link" href="/methods">查看方法库 <span aria-hidden="true">→</span></a>
+    </header>
+    <p class="wb-section-lede">
+      二进制修复不是单一工具能完成的：静态恢复、符号探索、动态追踪与差分验证各自回答不同问题。
+      下面的组合对应本工作台的接入点；状态以连接器页的本机探测为准。
+    </p>
+    <div class="wb-methods">
+      <a class="wb-method" href="https://ghidra-sre.org/" target="_blank" rel="noopener noreferrer">
+        <span class="wb-method-tag">STATIC</span>
+        <strong>Ghidra · Rizin · objdump</strong>
+        <p>恢复函数、反编译与定位缺陷区间。Route B 的 objdump/readelf 证据是基线自检的一部分。</p>
+        <span class="wb-method-foot">官方文档 ↗</span>
+      </a>
+      <a class="wb-method" href="https://angr.io/" target="_blank" rel="noopener noreferrer">
+        <span class="wb-method-tag">SYMBOLIC</span>
+        <strong>angr · Triton</strong>
+        <p>把「什么输入能到达危险点」变成约束求解问题；适合小函数与明确的崩溃路径。</p>
+        <span class="wb-method-foot">官方文档 ↗</span>
+      </a>
+      <a class="wb-method" href="https://frida.re/docs/home/" target="_blank" rel="noopener noreferrer">
+        <span class="wb-method-tag">DYNAMIC</span>
+        <strong>Frida · QEMU · GDB</strong>
+        <p>在真实或模拟环境中观察 API、寄存器与内存；跨架构复跑依赖 QEMU 的用户态模拟。</p>
+        <span class="wb-method-foot">官方文档 ↗</span>
+      </a>
+      <a class="wb-method" href="https://github.com/GNOME/diaphora" target="_blank" rel="noopener noreferrer">
+        <span class="wb-method-tag">DIFF / FUZZ</span>
+        <strong>Diaphora · BinDiff · AFL++</strong>
+        <p>比较修复前后的二进制、确认补丁只改变目标行为；模糊测试用于寻找回归与相邻路径。</p>
+        <span class="wb-method-foot">官方文档 ↗</span>
+      </a>
+    </div>
+    <div class="wb-caveat">
+      <strong>口径提醒</strong>
+      <p>
+        「符号执行成功」不等于「补丁正确」；「模糊测试通过」也不等于「不存在漏洞」。
+        本工作台把静态证据、运行结果与人工契约分开呈现，导出也不代表生产批准。
+      </p>
+    </div>
+  </section>
+
+  <section class="wb-section wb-boundary" aria-labelledby="wb-boundary-title">
+    <div>
+      <p class="wb-eyebrow">BOUNDARY</p>
+      <h2 id="wb-boundary-title">安全边界</h2>
+    </div>
+    <ul>
+      <li>服务只绑定回环地址；跨设备访问需要你显式改变部署方式，不在默认配置内。</li>
+      <li>粘贴的代码只做静态建议，不执行；上传的二进制由独立控制器/沙箱处理。</li>
+      <li>模型调用只走后端，key 不写入浏览器存储；插件清单只读，不加载代码。</li>
+    </ul>
+  </section>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -120,13 +233,16 @@
   }
 
   var list = window.BRJobs.list();
+  var counter = document.getElementById("wb-stat-local");
+  if (counter) counter.textContent = String(list.length);
   host.textContent = "";
 
   if (!list.length) {
     var empty = document.createElement("div");
-    empty.className = "job-home-empty";
+    empty.className = "wb-empty";
     empty.dataset.testid = "agent-job-cards-empty";
-    empty.textContent = "还没有本机任务记录。";
+    empty.innerHTML = "<strong>还没有本机任务</strong>" +
+      "<p>先粘贴一段代码，或从上方「新建任务」开始。对话会实时写入服务端历史。</p>";
     host.appendChild(empty);
   }
 
@@ -169,5 +285,64 @@
     phase.textContent = detail.text || PHASE_LABELS[detail.state] || detail.state;
   });
 })();
+</script>
+<script>
+  (function () {
+    var card = document.querySelector("[data-testid='launch-card']");
+    if (!card) return;
+    var tabs = card.querySelectorAll("[data-launch-mode]");
+    var scenarios = card.querySelectorAll("[data-scenario]");
+    var cta = document.getElementById("wb-launch-cta");
+    var kicker = document.getElementById("wb-launch-kicker");
+    var title = document.getElementById("wb-launch-title");
+    var desc = document.getElementById("wb-launch-desc");
+    var demoRow = document.getElementById("wb-launch-demo");
+    var mode = "live";
+    var scenario = "fresh";
+    var COPY = {
+      live: {
+        kicker: "REAL SESSION",
+        title: "新建一次真实修复",
+        desc: "对话、历史与任务结果都写入本机服务端；创建任务、开始执行由你确认。",
+        label: "＋ 新建任务"
+      },
+      demo: {
+        kicker: "FIXTURE SESSION",
+        title: "打开一段演示会话",
+        desc: "使用合成 fixture 查看完整界面与成功/失败状态；不创建任务、不执行真实修复。",
+        label: "打开演示会话"
+      }
+    };
+    function render() {
+      var copy = COPY[mode];
+      kicker.textContent = copy.kicker;
+      title.textContent = copy.title;
+      desc.textContent = copy.desc;
+      cta.innerHTML = copy.label + ' <span aria-hidden="true">→</span>';
+      if (mode === "demo") {
+        cta.href = "/agent/new?new=1&fixture=1" + (scenario === "fresh" ? "" : "&scenario=" + scenario);
+        demoRow.hidden = false;
+      } else {
+        cta.href = "/agent/new?new=1";
+        demoRow.hidden = true;
+      }
+      tabs.forEach(function (tab) {
+        var active = tab.dataset.launchMode === mode;
+        tab.classList.toggle("is-active", active);
+        tab.setAttribute("aria-selected", active ? "true" : "false");
+      });
+    }
+    tabs.forEach(function (tab) {
+      tab.addEventListener("click", function () { mode = tab.dataset.launchMode; render(); });
+    });
+    scenarios.forEach(function (button) {
+      button.addEventListener("click", function () {
+        scenario = button.dataset.scenario;
+        scenarios.forEach(function (item) { item.classList.toggle("is-active", item === button); });
+        render();
+      });
+    });
+    render();
+  })();
 </script>
 {% endblock %}

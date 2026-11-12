@@ -1,0 +1,8 @@
+{
+  "id": "angr-paths",
+  "name": "angr path explorer",
+  "kind": "analysis",
+  "description": "Describes a symbolic exploration job that proposes candidate input paths.",
+  "enabled": false,
+  "docs_url": "https://angr.io/"
+}

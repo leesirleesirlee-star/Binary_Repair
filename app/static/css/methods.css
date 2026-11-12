@@ -1,0 +1,93 @@
+/* 方法与工具：修复链、工具矩阵、验证问题与参考。 */
+
+.methods { max-width: 1120px; }
+.methods-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.methods-eyebrow {
+  margin: 0 0 8px;
+  font-family: var(--ds-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.18em;
+  color: var(--ds-faint);
+}
+.methods-chain { margin-top: 26px; }
+.methods-chain h2, .methods-tools h2, .methods-questions h2, .methods-refs h2 {
+  margin: 0 0 14px;
+  font-size: 19px;
+  letter-spacing: -0.015em;
+}
+.methods-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 10px;
+}
+.methods-steps li {
+  display: flex;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--ds-border);
+  border-radius: 13px;
+  background: var(--ds-surface);
+}
+.methods-step-no { font-family: var(--ds-mono); font-size: 10px; color: var(--ds-accent-text); padding-top: 2px; }
+.methods-steps strong { display: block; font-size: 13px; }
+.methods-steps p { margin: 4px 0 0; font-size: 12px; line-height: 1.7; color: var(--ds-muted); }
+
+.methods-tools { margin-top: 30px; }
+.methods-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
+.methods-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 16px;
+  border: 1px solid var(--ds-border);
+  border-radius: 14px;
+  background: var(--ds-surface);
+}
+.methods-tag {
+  align-self: flex-start;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--ds-surface-3);
+  color: var(--ds-muted);
+  font-family: var(--ds-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+}
+.methods-card h3 { margin: 2px 0 0; font-size: 14px; }
+.methods-card p { margin: 0; font-size: 12px; line-height: 1.75; color: var(--ds-text-2); }
+.methods-how { color: var(--ds-muted) !important; }
+.methods-how code { font-size: 10.5px; }
+.methods-links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: auto; padding-top: 4px; }
+.methods-links a { font-size: 11.5px; color: var(--ds-accent-text); text-decoration: none; }
+.methods-links a:hover { text-decoration: underline; }
+
+.methods-questions { margin-top: 32px; padding: 20px; border: 1px solid var(--ds-border); border-radius: 16px; background: var(--ds-surface); }
+.methods-q-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.methods-q-grid strong { display: block; font-size: 12.5px; }
+.methods-q-grid p { margin: 5px 0 0; font-size: 11.5px; line-height: 1.7; color: var(--ds-muted); }
+
+.methods-refs { margin-top: 30px; padding-top: 20px; border-top: 1px solid var(--ds-border); }
+.methods-refs ul { margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.9; color: var(--ds-muted); }
+.methods-refs a { color: var(--ds-accent-text); text-decoration: none; }
+.methods-refs a:hover { text-decoration: underline; }
+.methods-foot { margin: 14px 0 0; font-size: 11.5px; line-height: 1.7; color: var(--ds-faint); }
+
+@media (max-width: 640px) {
+  .methods-head { flex-direction: column; }
+}
+
+/* Research-backed maturity section */
+.methods-maturity { margin: 28px 0; padding: 18px; border: 1px solid var(--ds-border); border-radius: 16px; background: var(--ds-surface); }
+.methods-sub { margin: 0 0 12px; color: var(--ds-muted); font-size: 12px; line-height: 1.75; }
+.methods-matrix { width: 100%; border-collapse: collapse; font-size: 11px; }
+.methods-matrix th, .methods-matrix td { padding: 8px 9px; border-bottom: 1px solid var(--ds-border); text-align: left; vertical-align: top; line-height: 1.6; }
+.methods-matrix th { color: var(--ds-faint); font-family: var(--ds-mono); font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; }
+.methods-matrix td:first-child { color: var(--ds-accent-text); font-family: var(--ds-mono); font-weight: 600; }
+.methods-uplift { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 14px 0; }
+.methods-uplift article { padding: 12px 13px; border: 1px solid var(--ds-border); border-radius: 11px; background: var(--ds-surface-2); }
+.methods-uplift h3 { margin: 0 0 6px; font-size: 12px; }
+.methods-uplift ul { margin: 0; padding-left: 16px; color: var(--ds-text-2); font-size: 11px; line-height: 1.75; }
+@media (max-width: 720px) { .methods-uplift { grid-template-columns: 1fr; } .methods-matrix { min-width: 620px; } .methods-maturity { overflow-x: auto; } }

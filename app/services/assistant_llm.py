@@ -53,6 +53,7 @@ __all__ = [
     "generate_plan",
     "resolve_mode",
     "resolve_model",
+    "operator_username",
     "validate_plan",
 ]
 
@@ -61,6 +62,7 @@ ASSISTANT_MODEL_ENV = "BINARYREPAIR_ASSISTANT_MODEL"
 PROVIDER_KEY_ENV = "BINARYREPAIR_ASSISTANT_PROVIDER_KEY"
 PROVIDER_BASE_ENV = "BINARYREPAIR_ASSISTANT_PROVIDER_BASE_URL"
 PROVIDER_TIMEOUT_ENV = "BINARYREPAIR_ASSISTANT_PROVIDER_TIMEOUT"
+ASSISTANT_USERNAME_ENV = "BINARYREPAIR_ASSISTANT_USERNAME"
 DEFAULT_MODEL = "deepseek-chat"
 DEFAULT_PROVIDER_BASE = "https://api.deepseek.com/v1"
 DEFAULT_TIMEOUT = 30.0
@@ -142,7 +144,7 @@ def _json_safe(value: Any) -> bool:
     return True
 
 
-def build_messages(description: str, *, context: Mapping[str, Any] | None = None) -> list[dict[str, str]]:
+def build_messages(description: str, *, context: Mapping[str, Any] | None = None, username: str = "") -> list[dict[str, str]]:
     """Build the planning messages.
 
     The prompt contains only the user description and structured context.  It
@@ -180,6 +182,11 @@ def build_messages(description: str, *, context: Mapping[str, Any] | None = None
         }
         if safe:
             payload["context"] = safe
+    # The operator username is request context for the model, never an
+    # authorization signal and never the provider key.
+    operator_username = (username or "").strip()
+    if operator_username:
+        payload["operator_username"] = operator_username
     user = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -603,6 +610,17 @@ def test_provider_connection(client: Any | None = None) -> dict[str, Any]:
     }
 
 
+def operator_username() -> str:
+    env_user = (os.environ.get(ASSISTANT_USERNAME_ENV) or "").strip()
+    if env_user:
+        return env_user
+    try:
+        from app.services.assistant_key_store import load_username
+        return (load_username() or "").strip()
+    except Exception:
+        return ""
+
+
 def generate_plan(
     description: str,
     *,
@@ -632,7 +650,8 @@ def generate_plan(
         return plan
 
     try:
-        messages = build_messages(description, context=context)
+        messages = build_messages(description, context=context,
+                                  username=operator_username())
         raw = _invoke(client, messages, requested)
     except TimeoutError:
         plan = _fallback(description, context, reason=FallbackReason.TIMEOUT,

@@ -13,6 +13,7 @@ this store when both are present.
 from __future__ import annotations
 
 import base64
+import json
 import ctypes
 import os
 import sys
@@ -26,8 +27,11 @@ _COMPAT_ENVS = ("DEEPSEEK_API_KEY",)
 _FILE_ENV = "BINARYREPAIR_ASSISTANT_KEY_FILE"
 _MAGIC_DPAPI = b"BRKEY1\n"
 _MAGIC_PLAIN = b"BRKEY0\n"
+_MAGIC_CRED = b"BRKEY2\n"
+_USERNAME_ENV = "BINARYREPAIR_ASSISTANT_USERNAME"
 _MAX_KEY_LEN = 512
 _MIN_KEY_LEN = 16
+_MAX_USERNAME_LEN = 80
 _SAVE_LOCK = threading.Lock()
 
 
@@ -183,36 +187,76 @@ def _validate_key(key: str) -> None:
         raise ValueError("API key must be printable ASCII")
 
 
-def save_key(key: str) -> dict[str, Any]:
+def _validate_username(username: str) -> str:
+    value = (username or "").strip()
+    if not value:
+        raise ValueError("username is empty")
+    if len(value) > _MAX_USERNAME_LEN:
+        raise ValueError("username is too long")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        raise ValueError("username must not contain control characters")
+    return value
+
+
+def save_key(key: str, username: str = "") -> dict[str, Any]:
     key = (key or "").strip()
     if not key:
         raise ValueError("API key is empty")
     _validate_key(key)
-    payload, protection = _protect_for_storage(key)
+    # Username is a display identity for this local credential; the key remains
+    # the only secret. Both travel inside the protected payload.
+    username = (username or "").strip()
+    if username:
+        username = _validate_username(username)
+    payload_obj = {"username": username, "key": key}
+    raw = json.dumps(payload_obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    payload, protection = _protect_for_storage(raw.decode("utf-8"))
     if protection == "mode-0600":
-        payload = _MAGIC_PLAIN + base64.b64encode(key.encode("utf-8"))
+        payload = _MAGIC_CRED + base64.b64encode(raw)
+    else:
+        payload = _MAGIC_CRED + payload[len(_MAGIC_DPAPI):]
     with _SAVE_LOCK:
         _atomic_write(key_path(), payload)
-    return {"configured": True, "protection": protection}
+    return {"configured": True, "protection": protection, "username": username}
 
 
-def load_key() -> str:
+def _read_credential() -> tuple[str, str]:
     path = key_path()
     try:
         raw = path.read_bytes()
     except (FileNotFoundError, NotADirectoryError, OSError):
-        return ""
+        return "", ""
     try:
+        if raw.startswith(_MAGIC_CRED):
+            body = raw[len(_MAGIC_CRED):]
+            if _is_windows():
+                body = _unprotect(body)
+            else:
+                body = base64.b64decode(body)
+            obj = json.loads(body.decode("utf-8"))
+            if not isinstance(obj, dict):
+                return "", ""
+            username = obj.get("username") if isinstance(obj.get("username"), str) else ""
+            key = obj.get("key") if isinstance(obj.get("key"), str) else ""
+            return username, key.strip()
         if raw.startswith(_MAGIC_DPAPI):
             if not _is_windows():
-                return ""
-            return _unprotect_from_storage(raw).strip()
+                return "", ""
+            return "", _unprotect_from_storage(raw).strip()
         if raw.startswith(_MAGIC_PLAIN):
-            encoded = raw[len(_MAGIC_PLAIN) :]
-            return base64.b64decode(encoded).decode("utf-8").strip()
-    except (OSError, ValueError, UnicodeDecodeError):
-        return ""
-    return ""
+            encoded = raw[len(_MAGIC_PLAIN):]
+            return "", base64.b64decode(encoded).decode("utf-8").strip()
+    except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        return "", ""
+    return "", ""
+
+
+def load_key() -> str:
+    return _read_credential()[1]
+
+
+def load_username() -> str:
+    return _read_credential()[0]
 
 
 def clear_key() -> bool:
@@ -265,20 +309,24 @@ def mask_key(key: str) -> str:
 
 def key_status() -> dict[str, Any]:
     env_key = _env_key()
-    stored = load_key()
+    stored_username, stored = _read_credential()
     key = env_key or stored
+    username = ""
     if env_key:
         source = "environment"
         protection = "environment"
+        username = (os.environ.get(_USERNAME_ENV) or "").strip()
     elif stored:
         source = "stored"
         protection = "dpapi-user" if _is_windows() else "mode-0600"
+        username = stored_username
     else:
         source = None
         protection = None
     return {
         "configured": bool(key),
         "source": source,
+        "username": username,
         "masked": mask_key(key),
         "protection": protection,
         "can_clear": bool(stored and not env_key),
