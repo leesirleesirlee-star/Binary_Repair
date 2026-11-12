@@ -1766,3 +1766,22 @@ html[data-motion="off"] body::after { animation: none !important; }
 :root:not([data-theme="dark"]) .ds-composer {
   background: rgba(255, 255, 255, 0.78);
 }
+
+
+/* History/back navigation safety: never leave a blue warp or blurred page
+   behind. This also covers a bfcache restore running an older transitions.js. */
+.ds-warp { display: none !important; }
+body.page-leaving .ds-main,
+body.page-leaving .home-shell,
+body.page-leaving .ds-home {
+  opacity: 1 !important;
+  transform: none !important;
+  filter: none !important;
+  transition: none !important;
+}
+body.page-enter .ds-main,
+body.page-enter .home-shell,
+body.page-enter .ds-home {
+  animation: none !important;
+}
+
