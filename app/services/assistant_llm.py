@@ -152,22 +152,20 @@ def build_messages(description: str, *, context: Mapping[str, Any] | None = None
     falls back instead of being rendered.
     """
     system = (
-        "You are the planning assistant of a binary-repair workbench.\n"
-        "Return ONLY a JSON object matching this shape:\n"
+        "You are the planning assistant for a binary-repair workbench.\n"
+        "Return ONLY one JSON object in this exact shape:\n"
         '{"plan_id":"string","mode":"llm","fallback":false,"fallback_reason":null,'
         '"model":null,"tokens":null,"steps":[{"id":"string","kind":"upload|question|review",'
         '"title":"string","prompt":"string","questions":[{"key":"string","label":"string",'
         '"input":"text|textarea","required":true,"ascii":true,"default":"string"}]}]}\n'
         "Rules:\n"
-        "- Every step needs a non-empty id, title and prompt; ids are unique.\n"
-        "- kind is upload, question or review; a question step needs >= 1 question.\n"
-        "- questions are only allowed on question steps; keys are unique per step.\n"
-        "- The last step must be kind=review.\n"
-        "- 1 to 6 steps, in the order the user should follow.\n"
-        "- Do not add fields outside this shape.\n"
-        "- You guide the user; you never create jobs, start runs or judge repairs.\n"
-        "- Never invent hashes, verdicts, evidence or token counts; model and tokens are filled by the caller.\n"
-        "- Use ASCII English for any value that will be submitted to the backend.\n"
+        "- 1 to 6 steps, in the order the user should follow; the last step must be kind=review.\n"
+        "- Every step needs a non-empty unique id, title and prompt; a question step needs at least one question; question keys are unique per step.\n"
+        "- Keep titles and prompts concise, but never omit a needed step or question to satisfy brevity.\n"
+        "- Do not restate the user's description, code or generic security rules.\n"
+        "- Only ask for information needed to create the repair contract. The user's input may be long; process it fully and do not ask the user to shorten it.\n"
+        "- Use ASCII English for values that will be submitted to the backend.\n"
+        "- Never create jobs, start runs, invent hashes, verdicts, evidence or token counts.\n"
         "- No markdown fences, no commentary."
     )
     payload: dict[str, Any] = {"description": description}
