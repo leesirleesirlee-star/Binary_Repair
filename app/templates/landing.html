@@ -101,7 +101,7 @@
             <input type="hidden" name="workspace" id="home-workspace" value="{{ default_workspace.id }}">
             <input type="hidden" name="mode" id="home-mode" value="{{ default_mode.id }}">
             <input type="hidden" name="new" value="1">
-            <input type="hidden" name="fixture" id="home-fixture" value="">
+            <input type="hidden" name="fixture" id="home-fixture" value="0">
             <label class="visually-hidden" for="home-q" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">缺陷描述</label>
             <textarea id="home-q" name="q" rows="3" placeholder="描述二进制缺陷，或粘贴一段带漏洞的代码；/ 调用指令，@ 选择样本"></textarea>
             <div class="ds-composer-bar">
@@ -189,7 +189,7 @@
         workspaceInput.value = state.workspace;
         modeInput.value = state.mode;
         var fixtureInput = document.getElementById("home-fixture");
-        if (fixtureInput) { fixtureInput.value = state.mode === "demo" ? "1" : ""; }
+        if (fixtureInput) { fixtureInput.value = state.mode === "demo" ? "1" : "0"; }
         if (workspaceChip && ws) { workspaceChip.textContent = ws.dataset.value; }
 
         var selects = document.querySelectorAll("[data-select]");

@@ -270,6 +270,13 @@ async def ui_config():
     return JSONResponse(load_ui_config())
 
 
+def _fixture_int(value: str) -> int:
+    try:
+        return int((value or "0").strip() or "0")
+    except (TypeError, ValueError):
+        return 0
+
+
 def _agent_context(
     *,
     job_id: str = "",
@@ -462,7 +469,7 @@ async def connectors_api():
 async def agent_index(
     request: Request,
     job: str = "",
-    fixture: int = 0,
+    fixture: str = "",
     workspace: str = "",
     mode: str = "",
 ):
@@ -477,9 +484,10 @@ async def agent_index(
         # ``/agent/../x`` into another site path, so it must never redirect.
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", job):
             raise HTTPException(status_code=404, detail="unknown job")
+        fixture_flag = _fixture_int(fixture)
         query: dict[str, str] = {}
-        if fixture:
-            query["fixture"] = str(fixture)
+        if fixture_flag:
+            query["fixture"] = str(fixture_flag)
         if workspace:
             query["workspace"] = workspace
         if mode:
@@ -489,7 +497,7 @@ async def agent_index(
             target += "?" + urlencode(query)
         return RedirectResponse(url=target, status_code=307)
 
-    context = _agent_context(fixture=fixture, workspace=workspace, mode=mode)
+    context = _agent_context(fixture=_fixture_int(fixture), workspace=workspace, mode=mode)
     snapshot = connector_snapshot()
     try:
         history_tasks = HistoryStore().count()
@@ -507,7 +515,7 @@ async def agent_index(
 @app.get("/agent/new", response_class=HTMLResponse, name="agent_new")
 async def agent_new(
     request: Request,
-    fixture: int = 0,
+    fixture: str = "",
     workspace: str = "",
     mode: str = "",
 ):
@@ -515,7 +523,7 @@ async def agent_new(
     return templates.TemplateResponse(
         request,
         "agent.html",
-        _agent_context(fixture=fixture, workspace=workspace, mode=mode),
+        _agent_context(fixture=_fixture_int(fixture), workspace=workspace, mode=mode),
     )
 
 
@@ -523,7 +531,7 @@ async def agent_new(
 async def agent_console(
     request: Request,
     job_id: str,
-    fixture: int = 0,
+    fixture: str = "",
     workspace: str = "",
     mode: str = "",
 ):
@@ -538,7 +546,7 @@ async def agent_console(
         "agent.html",
         _agent_context(
             job_id=job_id,
-            fixture=fixture,
+            fixture=_fixture_int(fixture),
             workspace=workspace,
             mode=mode,
             job={"id": job_id},
