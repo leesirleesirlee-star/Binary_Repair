@@ -2952,31 +2952,61 @@
   var assistantKeyCancel = $("assistant-key-cancel");
   if (assistantKeyCancel) assistantKeyCancel.addEventListener("click", cancelAssistantKeyEditor);
 
-  function openModelConfig() {
+  function isNarrowModel() {
+    return !!(window.matchMedia && window.matchMedia("(max-width: 720px)").matches);
+  }
+
+  function syncModelConfigState() {
+    var side = $("agent-side");
+    var opener = $("agent-key-open");
+    if (!side || !opener) return { side: side, opener: opener, open: false };
+    var narrow = isNarrowModel();
+    var open = narrow
+      ? side.classList.contains("is-model-open")
+      : !side.classList.contains("is-key-closed");
+    opener.textContent = open ? "收起模型" : "配置模型";
+    opener.setAttribute("aria-expanded", open ? "true" : "false");
+    opener.classList.toggle("is-active", open);
+    return { side: side, opener: opener, open: open };
+  }
+
+  function toggleModelConfig() {
     var side = $("agent-side");
     if (!side) return;
-    side.classList.add("is-model-open");
-    side.scrollTop = 0;
-    var panel = $("assistant-key-panel");
-    if (panel) panel.scrollIntoView({ block: "start", behavior: "smooth" });
-    var user = $("assistant-key-username");
-    if (user && !user.closest("[hidden]")) setTimeout(function () { user.focus(); }, 150);
+    if (isNarrowModel()) {
+      side.classList.toggle("is-model-open");
+    } else {
+      side.classList.toggle("is-key-closed");
+    }
+    var state = syncModelConfigState();
+    if (state.open) {
+      side.scrollTop = 0;
+      var panel = $("assistant-key-panel");
+      if (panel) panel.scrollIntoView({ block: "start", behavior: "smooth" });
+      var user = $("assistant-key-username");
+      if (user && !user.closest("[hidden]")) setTimeout(function () { user.focus(); }, 150);
+    }
   }
 
   function closeModelConfig() {
     var side = $("agent-side");
-    if (side) side.classList.remove("is-model-open");
+    if (!side) return;
+    if (isNarrowModel()) side.classList.remove("is-model-open");
+    else side.classList.add("is-key-closed");
+    syncModelConfigState();
     var opener = $("agent-key-open");
     if (opener) opener.focus();
   }
 
   var assistantKeyOpen = $("agent-key-open");
-  if (assistantKeyOpen) assistantKeyOpen.addEventListener("click", openModelConfig);
+  if (assistantKeyOpen) assistantKeyOpen.addEventListener("click", toggleModelConfig);
   var assistantKeyClose = $("agent-key-close");
   if (assistantKeyClose) assistantKeyClose.addEventListener("click", closeModelConfig);
   window.addEventListener("keydown", function (event) {
     if (event.key === "Escape") closeModelConfig();
   });
+  window.addEventListener("resize", syncModelConfigState);
+  syncModelConfigState();
 
   refreshAssistantKeyStatus();
 

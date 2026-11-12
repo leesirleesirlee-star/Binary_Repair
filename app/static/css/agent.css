@@ -995,3 +995,12 @@ body.agent-focus .ds-sidebar-expand { display: none !important; }
   }
 }
 
+
+/* "配置模型" is a real open/close control for the key panel. */
+.agent-side.is-key-closed .agent-key-panel { display: none; }
+.agent-key-open.is-active {
+  border-color: var(--ds-accent);
+  background: var(--ds-accent-soft);
+  color: var(--ds-accent-text);
+}
+
