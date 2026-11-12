@@ -14,6 +14,19 @@
     document.body.classList.add("page-enter");
   });
 
+
+  function clearLeavingState() {
+    document.body.classList.remove("page-leaving");
+    var warp = document.querySelector(".ds-warp");
+    if (warp) { warp.style.opacity = "0"; }
+  }
+
+  // A bfcache restore keeps the old DOM and classes. If the user navigated
+  // away mid-transition, page-leaving would otherwise leave the blue scan
+  // overlay stuck on the restored page.
+  window.addEventListener("pageshow", clearLeavingState);
+  window.addEventListener("pagehide", clearLeavingState);
+
   document.addEventListener("click", function (event) {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     var link = event.target.closest ? event.target.closest("a") : null;
