@@ -1199,8 +1199,8 @@
       return step.title || step.id;
     }).join(" → ");
     pushMessage("assistant",
-      "你好，我是这个工作台的引导助手。这次按「" + titles + "」带你填完任务单。\n" +
-      "两件事先说清楚：我只做引导和解释，不会替你创建任务或开始执行；修复结论由验收引擎给出，不由我判断。");
+      "按「" + titles + "」逐步完成建单。\n" +
+      "我只引导，不创建/执行；结论由验收引擎给出。");
     renderCurrentStep();
     renderSide();
   }
@@ -3060,15 +3060,13 @@
     } else if (PLAN_FIXTURE) {
       state.plan = FIXTURES.plan;
       startGuidedFlow();
-      pushMessage("assistant", "说明：本页的引导计划来自占位 fixture（真实计划需要 M1 的端点与 M5 的 planner），但你点击「创建任务」后会真实提交到本机后端。");
+      pushMessage("assistant", "本页计划来自占位 fixture；点击「创建任务」后仍会真实提交到本机后端。");
     } else {
       clear(stream());
       var fresh = FRESH_SESSION;
       var greeting =
-        "描述你想修的这个二进制问题，我会向后端请求一份引导计划。\n" +
-        "也可以直接粘贴一段带漏洞的代码（例如 shell=True、strcpy、eval），我会给出静态修复建议。\n" +
-        "如果计划服务还没接通，我会直接说「未接通」，不会用占位内容代替；" +
-        "创建任务、开始执行由你点击确认，结论由验收引擎给出。";
+        "描述二进制问题，我会请求引导计划；也可直接粘贴带漏洞的代码。\n" +
+        "计划未接通会明确说明；创建/执行需你确认，结论由验收引擎给出。";
       if (fresh) {
         try { window.localStorage.removeItem(historyKey()); } catch (error) { /* ignore */ }
         state.entries = [];

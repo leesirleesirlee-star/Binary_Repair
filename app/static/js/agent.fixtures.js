@@ -27,13 +27,13 @@
         id: "sample",
         kind: "upload",
         title: "第 1 步 · 样本",
-        prompt: "先把要修复的二进制拖进来。我只在本机读取它，计算大小与 SHA-256 给你核对；真正的上传发生在你点击「创建任务」那一刻。"
+        prompt: "拖入二进制；本机读取并核对大小与 SHA-256；点击「创建任务」后才真正上传。"
       },
       {
         id: "defect",
         kind: "question",
         title: "第 2 步 · 缺陷",
-        prompt: "用一句话说清哪里不对。注意：提交给后端的数据必须是英文 ASCII，所以请直接填写英文技术描述，或点「使用默认答案」。",
+        prompt: "用一句话说明缺陷；提交字段必须是英文 ASCII。",
         questions: [
           {
             key: "defect",
@@ -49,7 +49,7 @@
         id: "tests",
         kind: "question",
         title: "第 3 步 · 用例与环境",
-        prompt: "给我至少一条合法用例，最好再补一条边界和一条越界用例。每行一条。",
+        prompt: "至少给一条合法用例，最好再加边界和越界用例；每行一条。",
         questions: [
           {
             key: "valid_tests",
@@ -73,7 +73,7 @@
         id: "contract",
         kind: "question",
         title: "第 4 步 · 安全契约",
-        prompt: "契约决定验收引擎怎么判。四项都可以先用默认值，再逐条改。",
+        prompt: "契约决定验收规则；可先用默认值，再逐条修改。",
         questions: [
           {
             key: "valid_domain",
@@ -113,7 +113,7 @@
         id: "review",
         kind: "review",
         title: "第 5 步 · 复核并创建",
-        prompt: "核对下面的任务单。任何一项都可以点「修改」回到对应步骤；确认无误后由你点击「创建任务」，我不会替你发起。"
+        prompt: "核对任务单；可点「修改」返回；确认后由你点击「创建任务」。"
       }
     ]
   };
