@@ -1,0 +1,90 @@
+@layer step-design {
+  .route-overview {
+    --tile-gap: .55rem;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--tile-gap);
+    align-items: start;
+  }
+  .route-scope, .route-connectors { grid-column: 1 / -1; }
+  .route-scope {
+    display: grid;
+    gap: .25rem;
+    padding: .72rem .85rem;
+    border: 1px solid var(--line);
+    border-radius: .75rem;
+    background: color-mix(in srgb, var(--surface) 74%, transparent);
+  }
+  .route-scope > span { color: var(--muted); font-size: .68rem; font-weight: 630; }
+  .route-scope h3 { display: flex; gap: .45rem; align-items: center; margin: 0; font-size: .94rem; }
+  .route-scope h3 svg { color: var(--accent); }
+  .route-scope p { color: var(--muted); font-size: .79rem; overflow-wrap: anywhere; }
+  .route-connectors {
+    display: grid;
+    place-items: end center;
+    height: .5rem;
+    background: linear-gradient(var(--line), var(--line)) center / 1px 100% no-repeat;
+  }
+  .route-connectors::after { content: ''; width: 50%; height: .25rem; border: 1px solid var(--line); border-bottom: 0; border-radius: .28rem .28rem 0 0; }
+  .route-slot { min-width: 0; }
+  .route-lane { padding: 0; border-radius: .75rem; }
+  .route-heading { min-width: 0; display: flex; align-items: center; flex: 1; gap: .38rem; }
+  .route-name { font-size: .8rem; font-weight: 650; white-space: nowrap; }
+  .route-status { display: inline-flex; gap: .28rem; align-items: center; text-align: end; }
+  .route-marker { width: .4rem; height: .4rem; border: 1px solid currentColor; border-radius: 50%; flex: none; }
+  .route-lane[data-status="not_run"] .route-letter, .route-lane[data-status="pending"] .route-letter { background: var(--sidebar); color: var(--muted); }
+  .route-lane:is([data-status="not_run"], [data-status="pending"]) { background: color-mix(in srgb, var(--surface) 36%, transparent); }
+  .route-lane[data-status="failed"] .route-status { color: var(--error); }
+  .route-lane[data-status="in_progress"] .route-status { color: var(--accent); }
+  .route-lane[data-status="in_progress"] .route-marker { background: currentColor; }
+  .route-lane .step-content { font-size: .77rem; }
+  .route-note { color: var(--muted); overflow-wrap: anywhere; padding-top: .45rem; }
+
+  .trace { margin-top: 1rem; }
+  .trace-log { display: grid; gap: .45rem; }
+  .step-card, .phase-group { min-width: 0; }
+  .step-card {
+    background: color-mix(in srgb, var(--surface) 68%, transparent);
+    border: 1px solid var(--line);
+    border-radius: .62rem;
+  }
+  :is(.step-card, .phase-group, .route-lane) > summary { padding: .24rem .55rem; min-height: 2.58rem; }
+  :is(.step-card, .phase-group, .route-lane) > summary > svg:last-child { color: var(--muted); }
+  :is(.step-card, .phase-group, .route-lane)[data-expanded="false"] > summary > svg:last-child { transform: none; }
+  :is(.step-card, .phase-group, .route-lane)[data-expanded="true"] > summary > svg:last-child { transform: rotate(90deg); }
+  .step-heading { flex: 1; min-width: 0; display: flex; align-items: center; gap: .44rem; }
+  .step-icon { position: relative; display: grid; place-items: center; width: 1.55rem; height: 1.55rem; border-radius: .36rem; flex: none; color: var(--muted); background: color-mix(in srgb, var(--sidebar) 83%, transparent); }
+  .step-card[data-status="in_progress"] .step-icon, .phase-group[data-status="in_progress"] > summary { color: var(--accent); }
+  .step-card[data-status="completed"] .step-icon, .step-card[data-status="applied"] .step-icon { color: var(--pass); }
+  .step-card[data-status="failed"] .step-icon { color: var(--error); }
+  .step-card[data-status="proposed"] .step-icon { color: var(--warn); }
+  .step-pulse { position: absolute; right: -.08rem; top: -.06rem; height: .36rem; width: .36rem; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 2px var(--surface); }
+  @media (prefers-reduced-motion: no-preference) {
+    .step-pulse, .route-lane[data-status="in_progress"] .route-marker { animation: route-pulse 1.35s ease-out infinite alternate; }
+  }
+  .step-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .81rem; font-weight: 590; }
+  .step-card[open] .step-name { white-space: normal; overflow-wrap: anywhere; }
+  .step-duration { border: 1px solid var(--line); border-radius: .32rem; padding: .05rem .27rem; flex: none; font: .66rem/1.45 ui-monospace, monospace; white-space: nowrap; color: var(--muted); }
+  .step-status { flex: none; color: var(--muted); font-size: .68rem; font-weight: 540; }
+  .step-time { font-size: .69rem; font-variant-numeric: tabular-nums; }
+  .step-content { display: grid; gap: .42rem; min-width: 0; padding: .16rem .62rem .68rem; font-size: .8rem; overflow-wrap: anywhere; }
+  .step-card .step-content { border-top: 1px solid var(--line); padding-top: .52rem; }
+  .step-card[data-status="failed"] .step-content { background: color-mix(in srgb, var(--error) 6%, transparent); }
+  .phase-group > summary { color: var(--muted); padding-inline: .25rem; min-height: 2.05rem; }
+  .phase-group > .step-panel > .step-content { padding: .03rem 0 .18rem .66rem; border-inline-start: 1px solid var(--line); }
+  .phase-steps { display: grid; min-width: 0; gap: .33rem; }
+  .terminal-output pre { color: #e2e7f7; background: #171a29; }
+  .terminal-output .stderr { color: #ffaaa5; }
+  @media (hover: hover) {
+    :is(.step-card, .route-lane) > summary:hover { background: color-mix(in srgb, var(--accent-soft) 48%, transparent); }
+  }
+  @media (max-width: 440px) {
+    .step-heading, .route-heading { gap: .29rem; }
+    .step-status { font-size: .6rem; }
+    .route-heading { flex-wrap: wrap; }
+    .route-status { margin-inline-start: 0; }
+  }
+  @media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
+    .route-scope, .step-card, .route-lane:is([data-status="not_run"], [data-status="pending"]) { background: var(--surface); }
+  }
+}

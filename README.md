@@ -108,6 +108,8 @@ Final delivery notes: [`DELIVERY.md`](DELIVERY.md).
 
 ## Quick start
 
+For the standalone English and Simplified Chinese conversation demo, see the [frontend preview guide](app/static/ui/README.md) and [frontend handoff](docs/handoff/2026-11-17-frontend-delivery.md). The demo uses synthetic events and can run without the backend.
+
 ### macOS / Linux
 
 ```bash
