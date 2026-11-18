@@ -18,7 +18,7 @@ if (-not $token) {
     Set-Content -Path $tokenFile -Value $token -NoNewline
 }
 $env:BINARYREPAIR_SESSION_TOKEN = $token
-$url = "http://127.0.0.1:8123/?token=$token"
+$url = "http://127.0.0.1:8123/welcome?token=$token"
 
 Write-Host ""
 Write-Host " BinaryRepair MVP - GUI (local session)" -ForegroundColor Cyan

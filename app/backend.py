@@ -262,8 +262,11 @@ class Backend(Protocol):
                    assumptions: str) -> str: ...
 
     def get_snapshot(self, job_id: str) -> dict[str, Any]: ...
-    def start(self, job_id: str) -> None: ...
+    def list_jobs(self, limit: int = 50) -> list[dict[str, Any]]: ...
+    def start(self, job_id: str, idempotency_key: str | None = None) -> dict[str, Any] | None: ...
     def cancel(self, job_id: str) -> None: ...
+    def get_comparison(self, job_id: str) -> dict[str, Any] | None: ...
+    def get_run_evaluation(self, job_id: str, run_id: str) -> dict[str, Any] | None: ...
     def update_contract(
         self,
         job_id: str,
@@ -315,16 +318,45 @@ class MockBackend:
         return job
 
     def get_snapshot(self, job_id: str) -> dict[str, Any]:
-        return demo.snapshot(self._job(job_id))
+        job = self._job(job_id)
+        snapshot = demo.snapshot(job)
+        tests = job.get("valid_tests") or []
+        snapshot["manifest_sha256"] = hashlib.sha256(
+            json.dumps(tests, sort_keys=True, ensure_ascii=True).encode("utf-8")
+        ).hexdigest()
+        return snapshot
 
-    def start(self, job_id: str) -> None:
+    def list_jobs(self, limit: int = 50) -> list[dict[str, Any]]:
+        rows = [
+            {
+                "id": job["id"],
+                "defect": job["defect"],
+                "phase": demo.snapshot(job)["phase"],
+                "created_at": job["created_at"],
+                "outcome": (demo.snapshot(job).get("verdict") or {}).get("outcome"),
+            }
+            for job in demo.JOBS.values()
+        ]
+        rows.sort(key=lambda row: (row["created_at"], row["id"]), reverse=True)
+        return rows[:limit]
+
+    def start(self, job_id: str, idempotency_key: str | None = None) -> dict[str, Any] | None:
         job = self._job(job_id)
         if not job["contract"].get("approved"):
             raise BackendError(409, "Contract is not approved for this job.")
         demo.start(job)
+        return {"run_id": "demo-run-" + job_id, "phase": job["phase"]}
 
     def cancel(self, job_id: str) -> None:
         demo.cancel(self._job(job_id))
+
+    def get_comparison(self, job_id: str) -> dict[str, Any] | None:
+        self._job(job_id)
+        return None
+
+    def get_run_evaluation(self, job_id: str, run_id: str) -> dict[str, Any] | None:
+        self._job(job_id)
+        return None
 
     def update_contract(
         self,
@@ -489,11 +521,41 @@ class HttpBackend:
             raise BackendError(502, "Backend snapshot is missing required fields (phase, routes).")
         return payload
 
-    def start(self, job_id: str) -> None:
-        self._request("POST", f"/api/jobs/{job_id}/start", where="start")
+    def list_jobs(self, limit: int = 50) -> list[dict[str, Any]]:
+        payload = self._request("GET", f"/api/jobs?limit={int(limit)}", where="list_jobs")
+        rows = payload.get("jobs") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            raise BackendError(502, "Backend job list is missing a 'jobs' list.")
+        return [row for row in rows if isinstance(row, dict)]
+
+    def start(self, job_id: str, idempotency_key: str | None = None) -> dict[str, Any] | None:
+        headers = {"Idempotency-Key": idempotency_key} if idempotency_key else None
+        payload = self._request(
+            "POST", f"/api/jobs/{job_id}/start", where="start", headers=headers
+        )
+        if not isinstance(payload, dict):
+            return None
+        return {"run_id": payload.get("run_id") or payload.get("id"), "phase": payload.get("phase")}
 
     def cancel(self, job_id: str) -> None:
         self._request("POST", f"/api/jobs/{job_id}/cancel", where="cancel")
+
+    def get_comparison(self, job_id: str) -> dict[str, Any] | None:
+        payload = self._request("GET", f"/api/jobs/{job_id}/comparison", where="get_comparison")
+        return payload if isinstance(payload, dict) else None
+
+    def get_run_evaluation(self, job_id: str, run_id: str) -> dict[str, Any] | None:
+        try:
+            payload = self._request(
+                "GET",
+                f"/api/jobs/{job_id}/runs/{run_id}/evaluation",
+                where="get_run_evaluation",
+            )
+        except BackendError as exc:
+            if exc.status_code == 404:
+                return None
+            raise
+        return payload if isinstance(payload, dict) else None
 
     def get_obligations(self, job_id: str) -> dict[str, list[dict[str, Any]]]:
         payload = self._request("GET", f"/api/jobs/{job_id}/obligations", where="get_obligations")
@@ -830,10 +892,14 @@ class LocalBackend:
             defect_description=defect or "Defect description not provided.",
             data_dir=self.data_dir,
         )
+        tests = [line.strip() for line in valid_tests.splitlines() if line.strip()]
         self._write_meta(
             record.id,
             {
-                "valid_tests": [line.strip() for line in valid_tests.splitlines() if line.strip()],
+                "valid_tests": tests,
+                "manifest_sha256": hashlib.sha256(
+                    json.dumps(tests, sort_keys=True, ensure_ascii=True).encode("utf-8")
+                ).hexdigest(),
                 "environment": environment.strip()
                 or "Ubuntu x86-64 VM (execution not implemented)",
                 "contract": self._contract(
@@ -860,13 +926,18 @@ class LocalBackend:
             "valid_tests": meta.get("valid_tests", []),
             "environment": meta.get("environment", ""),
             "created_at": record.created_at,
+            "manifest_sha256": meta.get("manifest_sha256"),
             "phase": record.phase,
             "cancelled": False,
             "contract": meta.get("contract") or self._contract(),
             "routes": self._placeholder_routes(record.phase),
         }
 
-    def start(self, job_id: str) -> None:
+    def list_jobs(self, limit: int = 50) -> list[dict[str, Any]]:
+        rows = job_store.list_jobs(data_dir=self.data_dir, limit=limit)
+        return rows
+
+    def start(self, job_id: str, idempotency_key: str | None = None) -> dict[str, Any] | None:
         self._record(job_id)
         raise BackendError(
             409, "Local controller mode does not implement run execution yet."
@@ -877,6 +948,14 @@ class LocalBackend:
         raise BackendError(
             409, "Local controller mode does not implement run execution yet."
         )
+
+    def get_comparison(self, job_id: str) -> dict[str, Any] | None:
+        self._record(job_id)
+        return None
+
+    def get_run_evaluation(self, job_id: str, run_id: str) -> dict[str, Any] | None:
+        self._record(job_id)
+        return None
 
     def update_contract(
         self,

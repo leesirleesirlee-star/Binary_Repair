@@ -7,7 +7,7 @@ export function shell(ctx) {
   const rail = el('aside', {class: 'rail', id: 'task-navigation'},
     el('div', {class: 'rail-top'},
       el('a', {class: 'brand', href: '#tasks'}, el('span', {class: 'brand-mark'}, icon('mark', 21)), 'BinaryRepair'),
-      api.writable && id ? button(t('create'), create, {glyph: 'plus', className: 'primary'}) : null,
+      el('a', {class: 'button subtle', href: '/ui/chat/'}, icon('chat', 16), t('openChat')),
       el('nav', {'aria-label': t('workspace')}, el('a', {class: 'nav-link', href: '#tasks', 'aria-current': current(!id)},
         icon('tasks', 16), t('tasks')))),
     jobs.length ? el('nav', {class: 'recent', 'aria-label': t('recent')},
@@ -22,13 +22,14 @@ export function shell(ctx) {
       el('a', {class: 'button subtle', href: '#tasks'}, icon('back', 16), t('tasks')) :
       el('span', {class: 'muted'}, t('workspace'))),
     el('div', {class: 'top-right'},
+      el('a', {class: 'button subtle', href: '/ui/chat/'}, icon('chat', 16), t('openChat')),
       button(null, search, {glyph: 'search', className: 'icon subtle', 'aria-label': t('search'), title: t('search') + ' (Ctrl+K)'}),
       button(language === 'en' ? '中文' : 'English', switchLanguage, {className: 'subtle',
         lang: language === 'en' ? 'zh-Hans' : 'en'}),
       button(null, settings, {glyph: 'settings', className: 'icon subtle mobile-toggle', 'aria-label': t('settings')})));
-  const main = el('main', {id: 'main', tabindex: '-1'}, el('div', {class: 'page'},
-    api.demo || ctx.job?.demo ? notice(t('demo'), 'demo') : null,
-    ctx.content));
+  const main = el('main', {id: 'main', tabindex: '-1'},
+    api.demo || ctx.job?.demo ? el('div', {class: 'page'}, notice(t('demo'), 'demo')) : null,
+    ctx.content);
   return el('div', {class: 'shell' + (menuOpen ? ' nav-open' : '')}, rail, el('div', {}, top, main));
 }
 
@@ -52,7 +53,7 @@ export function tasksView(ctx) {
   }
 
   const results = el('div', {class: 'card', id: 'task-results'});
-  const filterButtons = ['all', 'active', 'finished'].map(value => button(t(value), event => {
+  const filterButtons = ['all', 'active', 'finished'].map(value => button(t(value === 'finished' ? 'archived' : value), event => {
     setFilter(value);
     for (const item of filterButtons) item.setAttribute('aria-pressed', String(item === event.currentTarget));
     update();
@@ -67,13 +68,15 @@ export function tasksView(ctx) {
         el('div', {class: 'empty'}, el('h2', {}, t(jobs.length ? 'noMatches' : 'empty')),
           jobs.length ? null : el('p', {class: 'muted'}, t('emptyHelp'))),
       ...visible.map(job => el('a', {class: 'task-row', href: taskHref(job.id)}, el('span', {class: 'task-title'},
-        job.defect || job.id, el('small', {class: 'mono'}, job.id)), badge(phase(job), t),
+        job.defect || job.id, el('small', {class: 'mono'}, job.id)),
+        el('span', {class: 'inline'}, badge(phase(job), t), job.outcome ? badge(job.outcome, t) : null),
         date(job.updated_at ?? job.created_at, language), el('span', {class: 'arrow'}, icon('chevron', 16)))));
   };
   update();
   return el('div', {class: 'page'},
-    el('div', {class: 'section-head'}, el('h1', {}, t('tasks')),
-      api.writable ? button(t('create'), create, {glyph: 'plus', className: 'primary'}) : null),
+    el('div', {class: 'section-head'}, el('div', {class: 'heading'},
+      el('h1', {}, t('tasks')), el('p', {class: 'stat'}, t('archiveIntro'))),
+      el('a', {class: 'button primary', href: '/ui/chat/'}, icon('plus', 16), t('create'))),
     el('div', {class: 'controls'},
       el('div', {class: 'segments', role: 'group', 'aria-label': t('filterLabel')}, filterButtons),
       el('div', {class: 'search'}, icon('search', 15), input)),
@@ -112,11 +115,12 @@ export function createDialog({t, api, created}) {
     if (!form.reportValidity()) return;
     submit.disabled = true;
     try {
-      const id = await api.create({defect: description});
+      const id = await api.create({defect: description, file: binary});
       modal.close();
       created(id);
-    } catch {
-      feedback.textContent = t('unavailable');
+    } catch (error) {
+      feedback.textContent = t(error?.code === 'payload_too_large' ? 'fileTooLarge' :
+        error?.code === 'invalid_input' ? 'invalidInput' : 'unavailable');
       submit.disabled = false;
     }
   }}, el('label', {class: 'label'}, t('defect'), defect),
@@ -136,7 +140,9 @@ export function settingsDialog({t, preferences, setPreference, provider}) {
     el('label', {class: 'label'}, t('language'), select('language', [['en', 'English'], ['zh-Hans', '简体中文']])),
     el('label', {class: 'label'}, t('theme'), select('theme', ['system', 'light', 'dark'].map(value => [value, t(value)]))),
     el('label', {class: 'label'}, t('density'), select('density', ['comfortable', 'compact'].map(value => [value, t(value)]))),
-    el('div', {class: 'item'}, t('provider'), t(provider === null ? 'providerUnknown' : provider ? 'configured' : 'unconfigured'))));
+    el('div', {class: 'item'}, t('provider'), t(provider === null ? 'providerUnknown' : provider ? 'configured' : 'unconfigured')),
+    el('div', {class: 'item'}, t('conversationPreview'),
+      el('a', {class: 'button subtle', href: '/ui/chat/'}, t('open')))));
 }
 
 export function searchDialog({t, jobs, navigate}) {

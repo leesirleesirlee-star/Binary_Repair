@@ -143,6 +143,28 @@ def test_same_key_with_new_contract_returns_409(client: TestClient) -> None:
     assert conflict.status_code == 409
 
 
+def test_historical_run_evaluation_is_run_scoped(client: TestClient) -> None:
+    job_id = _create(client)["id"]
+    _approve_current(client, job_id)
+    started = client.post(
+        f"/api/jobs/{job_id}/runs",
+        json={
+            "contract_revision": 1,
+            "manifest_sha256": "1" * 64,
+            "idempotency_key": "history-1",
+        },
+    )
+    assert started.status_code == 202, started.text
+    run_id = started.json()["id"]
+    evaluation = client.get(f"/api/jobs/{job_id}/runs/{run_id}/evaluation")
+    assert evaluation.status_code == 200, evaluation.text
+    assert evaluation.json()["run_id"] == run_id
+    assert evaluation.json()["finalized"] is False
+
+    missing = client.get(f"/api/jobs/{job_id}/runs/not-a-run/evaluation")
+    assert missing.status_code == 404
+
+
 def test_artifact_metadata_and_download(client: TestClient) -> None:
     job_id = _create(client)["id"]
     listing = client.get(f"/api/jobs/{job_id}/artifacts")

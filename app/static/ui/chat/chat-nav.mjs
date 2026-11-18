@@ -8,7 +8,7 @@ export function appMark(className) {
     el('img', {class: 'mark-dark', src: './assets/mark-dark.svg', alt: ''}));
 }
 
-export function sidebar({t, list, mobile, newChat, search, settings, model, close}) {
+export function sidebar({t, list, mobile, newChat, search, settings, model, archive, close}) {
   const toggle = control(t('pinSidebar'), null, {glyph: 'sidebar', compact: true,
     tone: 'pin-sidebar', 'aria-expanded': 'false', 'aria-pressed': 'false'});
   const navButton = (key, glyph, click, extraClass = '') =>
@@ -23,7 +23,8 @@ export function sidebar({t, list, mobile, newChat, search, settings, model, clos
       navButton('new', 'plus', newChat, 'new-chat'),
       navButton('search', 'search', search, 'search-button')),
     el('nav', {'aria-label': t('chats')}, el('div', {class: 'source-label'}, t('recent')), list),
-    el('footer', {}, navButton('modelConfig', 'model', model), navButton('settings', 'settings', settings)));
+    el('footer', {}, navButton('modelConfig', 'model', model),
+      navButton('archive', 'tasks', archive), navButton('settings', 'settings', settings)));
   return {body, toggle};
 }
 

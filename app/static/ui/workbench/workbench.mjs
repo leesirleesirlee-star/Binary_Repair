@@ -5,7 +5,7 @@ import {taskView} from './task.mjs';
 import {createDialog, searchDialog, settingsDialog, shell, tasksView} from './views.mjs';
 
 const previewMode = new URLSearchParams(location.search).get('preview') === '1';
-const api = previewMode ? (await import('./preview.mjs')).preview : live;
+const api = previewMode ? (await import('./preview.mjs')).preview : {...live, lifecycle: false};
 const app = document.querySelector('#app');
 const preferences = {language: 'en', theme: 'system', density: 'comfortable'};
 const preferenceValues = {language: ['en', 'zh-Hans'], theme: ['system', 'light', 'dark'], density: ['comfortable', 'compact']};
@@ -43,7 +43,22 @@ function reflectPreferences() {
 }
 
 function errorKey(error) {
-  return ({
+  const byCode = {
+    session_required: 'session',
+    request_forbidden: 'permission',
+    not_found: 'taskMissing',
+    stale_revision: 'conflict',
+    stale_approval: 'conflict',
+    invalid_transition: 'conflict',
+    idempotency_key_conflict: 'conflict',
+    plan_transfer_not_authorized: 'permission',
+    payload_too_large: 'fileTooLarge',
+    invalid_input: 'invalidInput',
+    unsupported_contract_version: 'unavailable',
+    capability_unavailable: 'unavailable',
+    artifact_unavailable: 'unavailable',
+  };
+  return byCode[error?.code] ?? ({
     401: 'session', 403: 'permission', 404: 'taskMissing', 409: 'conflict',
     413: 'fileTooLarge', 422: 'invalidInput', 503: 'unavailable',
   })[error?.status] ?? 'unavailable';
@@ -65,6 +80,7 @@ function render({focus = false, mainOnly = false} = {}) {
   reflectPreferences();
   const ctx = {
     ...state, api, t, language: preferences.language, act, render, navigate, create, reload: refreshList,
+    refresh: () => readTask(state.generation),
     getFilter: () => state.filter,
     setFilter: value => { state.filter = value; },
     setQuery: value => { state.query = value; },
@@ -111,14 +127,16 @@ async function refreshList() {
     state.listError = errorKey(error);
   } finally {
     state.loading = false;
-    if (!state.id) render();
+    if (!state.id || !state.job) render();
   }
 }
+
+const BACKOFF = [2000, 4000, 8000, 16000, 30000];
 
 function schedule(generation) {
   clearTimeout(timer);
   if (generation !== state.generation || document.hidden || state.busy || !state.id || !shouldPoll(state.job)) return;
-  timer = setTimeout(() => readTask(generation, true), Math.min(12_000, 2000 * 2 ** failures));
+  timer = setTimeout(() => readTask(generation, true), BACKOFF[Math.min(failures, BACKOFF.length - 1)]);
 }
 
 async function readTask(generation, poll = false) {
@@ -128,8 +146,9 @@ async function readTask(generation, poll = false) {
   try {
     const job = await api.job(id);
     if (job.id !== id) throw new Error('Mismatched job identity');
+    const runId = job.execution?.run_id ?? null;
     const calls = job.phase === 'draft' ? [] : [
-      api.attempts(id), api.evaluation(id), api.artifacts(id), api.comparison(id),
+      api.attempts(id), api.evaluation(id, runId), api.artifacts(id), api.comparison(id, runId),
     ];
     const responses = await Promise.allSettled(calls);
     if (generation !== state.generation) return;
@@ -232,8 +251,7 @@ document.addEventListener('keydown', event => {
   if (event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey &&
       !event.target.closest('input, textarea, select, [contenteditable]')) {
     event.preventDefault();
-    if (api.writable) create();
-    else document.querySelector('#task-filter')?.focus();
+    location.href = '/ui/chat/';
   }
 });
 

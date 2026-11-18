@@ -1,25 +1,76 @@
-# BinaryRepair conversation preview
+# BinaryRepair web UI
 
-From the release checkout, run:
+The product has three surfaces, all served by the same local session:
+
+| Surface | Path | Role |
+| --- | --- | --- |
+| Welcome | `/welcome` | Entry page: choose conversation or archive, switch language |
+| Conversation | `/ui/chat/` | Main workspace: attach the binary, describe the defect, review and approve the contract, start, watch, cancel |
+| Archive | `/ui/` | Library: task state, checks, verdict, artifacts, export, and the link back into the conversation |
+
+The launcher opens `/welcome?token=...`; the redirect sets the HttpOnly cookie and
+removes the token from the address. `/ui/` and `/ui/chat/` then share that cookie.
+
+## Run it
+
+Mock mode, one process:
 
 ```powershell
-python -m http.server 8765 --bind 127.0.0.1 --directory app/static/ui
+.\start-gui.ps1
 ```
 
-Open `http://127.0.0.1:8765/index.html`. The earlier preview URL with `?preview=1` also opens the conversation. Stop the static server with Ctrl+C.
+Controller mode, three processes (the backend handoff has the same commands):
 
-Choose **Review a sample contract** or type a message. Open **Execution** to inspect tool output, proposed changes, and the Route A and Route B steps. On a wide screen, Execution stays next to the conversation. The sample pauses for contract review. Approve it, then choose **Start run** to see command output, retry, and a summary without a verdict. While a turn is active, use **Queue message** to add a follow-up or **Stop** to request synthetic cancellation.
+```powershell
+# 1 controller
+$env:BINARYREPAIR_DATA_DIR="$PWD\var"
+python -m uvicorn app.controller_api:app --host 127.0.0.1 --port 8000
 
-The execution overview puts the repair scope above two route tiles. Expand a route to see its stages and the recorded sample note. The event log groups cards by phase. Click or press Enter on a card to reveal its timestamp and any output, diff, or retry action. Durations appear when available. Status text remains visible without color or motion.
+# 2 GUI
+$env:BINARYREPAIR_BACKEND="http"; $env:BINARYREPAIR_API_BASE="http://127.0.0.1:8000"
+$env:BINARYREPAIR_DATA_DIR="$PWD\var"; $env:NO_PROXY="127.0.0.1,localhost"
+$env:BINARYREPAIR_SESSION_TOKEN="dev-token-please-change"
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8123
 
-Hover over the desktop rail to open it, or use its pin button to keep it open. Keyboard focus also opens the sidebar when navigating the rail. Reduced motion removes the spring transition. Use the header language button for Simplified Chinese. Settings offers system, light, and dark appearance. Search chats with Ctrl+K or Cmd+K. Both icon variants are in [assets](assets/).
+# 3 worker (only consumes result bundles; it does not execute binaries)
+python -m app.services.worker --data-dir "$PWD\var" --poll 2
+```
 
-**Model configuration** saves a preview model preference only. For the live provider, configure `DEEPSEEK_API_KEY` and `BINARYREPAIR_ASSISTANT_MODEL` in the trusted provider process. There is no browser key entry or live provider call in this preview.
+## Conversation behaviour
 
-For a Figma prototype, keep the layers named `Sidebar`, `Icon rail`, and `Navigation content` in both component variants. Change the clipped width between variants and preserve the nested layer names so Smart Animate can match them.
+* The first turn needs an attached binary and an ASCII defect description.
+* `POST /api/jobs` creates the draft; the contract card appears in the transcript.
+* Approval uses `contract.review_binding_digest`; a content-only hash is rejected
+  by the server as a stale approval. The reviewer name is required.
+* Edit reopens the valid-input scope; the server keeps the other saved fields and
+  advances the revision.
+* Start and cancel are explicit. Polling follows `execution.terminal`; a missing
+  or unfinalized evaluation stays pending and is never shown as success.
+* The run summary links to the archive for checks, artifacts, export and the
+  deliverable upload. Deliverables are not acceptance evidence.
+* Every `/api/...` request sends `X-BinaryRepair-Contract-Version: 1`; writes add
+  `x-csrf-token` from `GET /api/session`. The CSRF token is kept in memory only.
 
-This scaffold uses an in-memory synthetic event source. A file selection supplies display metadata only. No binary is processed and no backend or model is contacted. Conversations and transcripts reset on reload while language and appearance preferences persist. SSE resume, backend cancellation, transcript persistence, and large-transcript virtualization are later deliverables.
+The conversation page still offers a synthetic design preview at
+`/ui/chat/?preview=1`. It uses in-memory events and never contacts the job API.
 
-The previous task-oriented preview is available at `/workbench.html?preview=1`.
+## Archive behaviour
 
-The public entry pages stay in this directory. Implementation files are grouped under [chat](chat/), [workbench](workbench/), and [shared](shared/). The [frontend handoff](../../../docs/handoff/2026-11-17-frontend-delivery.md) links the design and verification notes.
+The archive is a read-mostly library. It lists tasks newest first, shows the
+lifecycle phase separately from the acceptance outcome, and opens a task with
+`#task/<id>`. A task page links back to the same conversation with
+`/ui/chat/?job=<id>`. Contract editing, approval and start are available from the
+conversation; the archive focuses on state, checks and evidence.
+
+## Design notes
+
+System font stack, one indigo accent, neutral glass surfaces, visible keyboard
+focus, 150 ms or shorter transitions, and solid surfaces under reduced
+transparency. Status is always written as text in addition to colour. UI copy
+switches between English and Simplified Chinese; submitted data (defect, contract
+fields, reviewer label, filenames) stays ASCII because the backend rejects
+non-ASCII input.
+
+Tests: `tests/test_ui_v1_api.py` (contract shape, CSRF, review binding, stale
+paths, cancellation, planning, welcome/chat/archive routes) and
+`tests/test_ui_preview_assets.py` (asset and module resolution).

@@ -108,7 +108,14 @@ Final delivery notes: [`DELIVERY.md`](DELIVERY.md).
 
 ## Quick start
 
-For the standalone English and Simplified Chinese conversation demo, see the [frontend preview guide](app/static/ui/README.md) and [frontend handoff](docs/handoff/2026-11-17-frontend-delivery.md). The demo uses synthetic events and can run without the backend.
+The launcher opens the welcome page at `/welcome`. The main workspace is the
+conversation at `/ui/chat/` (attach the binary, review and approve the contract,
+start and watch the run); the archive at `/ui/` holds task state, checks,
+evidence and export. Both pages share the same local session and contract-v1
+API. The [UI guide](app/static/ui/README.md) covers mock, controller and worker
+commands, and the [frontend handoff](docs/handoff/2026-11-17-frontend-delivery.md)
+records what is verified. A synthetic design preview remains at
+`/ui/chat/?preview=1` and never contacts the job API.
 
 ### macOS / Linux
 
@@ -124,11 +131,13 @@ For the standalone English and Simplified Chinese conversation demo, see the [fr
 
 The launcher creates `.venv`, installs `requirements.txt`, generates a local
 session token, and prints the authenticated URL
-`http://127.0.0.1:8123/?token=...`. Open that URL in a browser. No controller or
+`http://127.0.0.1:8123/welcome?token=...`. Open that URL in a browser. No controller or
 worker process is required for the demo backend.
 
-The UI includes `/agent`, `/settings`, `/guide`, `/methods` and `/connectors`.
-For a quick tour, read `START-HERE.md`; for screenshots, see `docs/showcase/`.
+The current product surfaces are `/welcome`, `/ui/chat/` and `/ui/`. The older
+`/agent`, `/settings`, `/guide`, `/methods` and `/connectors` pages remain
+available for historical workflows. For a quick tour, read `START-HERE.md`; for
+screenshots, see `docs/showcase/`.
 
 Run the test suite:
 

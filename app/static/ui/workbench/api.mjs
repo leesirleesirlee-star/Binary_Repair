@@ -1,53 +1,155 @@
-// Read adapters use only the documented GUI service routes.
-async function get(path) {
-  const response = await fetch(path, {
-    credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(8000),
-  });
-  if (!response.ok) throw Object.assign(new Error('Request failed'), {status: response.status});
-  return response.json();
+// Client for the contract-v1 browser API. Every request carries the version
+// header; writes also carry the session CSRF token. The token is held in
+// memory only and never written to storage.
+const VERSION_HEADER = 'X-BinaryRepair-Contract-Version';
+const VERSION = '1';
+
+let sessionPromise = null;
+
+async function parse(response) {
+  const type = response.headers.get('content-type') || '';
+  const body = type.includes('json') ? await response.json() : await response.text();
+  if (!response.ok) {
+    throw Object.assign(new Error(body?.detail || response.statusText), {
+      status: response.status,
+      code: body?.code,
+      correlationId: body?.correlation_id,
+      body,
+    });
+  }
+  return body;
 }
 
+async function readSession() {
+  const response = await fetch('/api/session', {
+    credentials: 'same-origin',
+    cache: 'no-store',
+    headers: {Accept: 'application/json', [VERSION_HEADER]: VERSION},
+  });
+  if (response.headers.get(VERSION_HEADER) !== VERSION) {
+    throw Object.assign(new Error('The server did not select contract v1.'), {status: 400});
+  }
+  const body = await parse(response);
+  if (body?.session !== true || typeof body.csrf_token !== 'string') {
+    throw Object.assign(new Error('No local session.'), {status: 401, code: 'session_required'});
+  }
+  return body.csrf_token;
+}
+
+function session() {
+  sessionPromise ??= readSession().catch(error => {
+    sessionPromise = null;
+    throw error;
+  });
+  return sessionPromise;
+}
+
+async function request(path, {method = 'GET', body, headers = {}, retry = true} = {}) {
+  const token = method === 'GET' ? null : await session();
+  const init = {
+    method,
+    credentials: 'same-origin',
+    cache: 'no-store',
+    headers: {
+      Accept: 'application/json',
+      [VERSION_HEADER]: VERSION,
+      ...(token ? {'x-csrf-token': token} : {}),
+      ...headers,
+    },
+  };
+  if (body !== undefined) {
+    init.body = body;
+  }
+  let response;
+  try {
+    response = await fetch(path, init);
+  } catch (error) {
+    if (method !== 'GET' && retry) return request(path, {method, body, headers, retry: false});
+    throw Object.assign(new Error('Network unavailable.'), {status: 0, cause: error});
+  }
+  if (response.status === 401) sessionPromise = null;
+  if (response.headers.get(VERSION_HEADER) !== VERSION) {
+    throw Object.assign(new Error('The server did not select contract v1.'), {
+      status: response.status,
+      code: 'unsupported_contract_version',
+    });
+  }
+  return parse(response);
+}
+
+const query = (params) => {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== '') search.set(key, value);
+  }
+  const text = search.toString();
+  return text ? '?' + text : '';
+};
+
+const json = value => JSON.stringify(value);
 const jobPath = id => '/api/jobs/' + encodeURIComponent(id);
 export const artifactUrl = id => '/api/artifacts/' + encodeURIComponent(id) + '/download';
-export const reportUrl = id => jobPath(id) + '/export';
+export const reportUrl = (id, runId) => jobPath(id) + '/export' + query({run_id: runId});
 
 export const live = {
   demo: false,
-  writable: false,
+  writable: true,
   list: async () => {
-    await get('/api/session');
-    const data = await get('/api/jobs?limit=50');
-    return data.jobs ?? [];
+    const data = await request('/api/jobs?limit=50');
+    return Array.isArray(data.jobs) ? data.jobs : [];
   },
-  job: id => get(jobPath(id)),
-  attempts: async id => {
-    const data = await get(jobPath(id) + '/attempts');
-    if (data.available === false || !Array.isArray(data.attempts)) return null;
-    return data.attempts.map(attempt => ({...attempt, run_id: attempt.run_id ?? data.run_id}));
-  },
-  evaluation: id => get(jobPath(id) + '/evaluation'),
+  job: id => request(jobPath(id)),
+  attempts: id => request(jobPath(id) + '/attempts'),
+  evaluation: (id, runId) => request(jobPath(id) + '/evaluation' + query({run_id: runId})),
   artifacts: async id => {
-    const data = await get(jobPath(id) + '/artifacts');
-    if (Array.isArray(data.artifacts)) return data.artifacts;
-    const groups = Object.values(data).filter(Array.isArray);
-    return groups.length ? groups.flat() : null;
+    const data = await request(jobPath(id) + '/artifacts');
+    return Array.isArray(data.artifacts) ? data.artifacts : [];
   },
-  comparison: id => get(jobPath(id) + '/comparison'),
+  comparison: (id, runId) => request(jobPath(id) + '/comparison' + query({run_id: runId})),
   provider: async () => {
-    const data = await get('/api/assistant/key');
-    return typeof data.key?.configured === 'boolean' ? data.key.configured : null;
+    const data = await request('/api/assistant/key');
+    return typeof data.configured === 'boolean' ? data.configured : null;
+  },
+  create: async ({defect, file}) => {
+    const form = new FormData();
+    form.append('binary', file, file.name);
+    form.append('defect', defect);
+    const data = await request('/api/jobs', {method: 'POST', body: form});
+    return data.id;
+  },
+  save: (id, fields, revision) => request(jobPath(id) + '/contract', {
+    method: 'POST',
+    body: json({expected_revision: revision, ...fields}),
+  }),
+  approve: (id, digest, reviewer) => request(jobPath(id) + '/approve', {
+    method: 'POST',
+    body: json({expected_sha256: digest, reviewer_label: reviewer}),
+  }),
+  start: (id, digest) => request(jobPath(id) + '/start', {
+    method: 'POST',
+    headers: {'Idempotency-Key': crypto.randomUUID()},
+    body: json({expected_sha256: digest}),
+  }),
+  cancel: (id, runId) => request(jobPath(id) + '/cancel', {
+    method: 'POST',
+    body: json({run_id: runId}),
+  }),
+  plan: id => request(jobPath(id) + '/plan', {method: 'POST', body: json({mode: 'deterministic'})}),
+  upload: async (id, file) => {
+    const form = new FormData();
+    form.append('file', file, file.name);
+    return request(jobPath(id) + '/deliverables', {method: 'POST', body: form});
   },
 };
 
-const terminal = new Set(['completed', 'done', 'failed', 'cancelled']);
+const terminal = new Set(['completed', 'failed', 'cancelled']);
 export function shouldPoll(job) {
   if (!job || job.phase === 'draft') return false;
   const execution = job.execution;
-  const status = execution?.status;
-  // Cancellation and unconfirmed termination need a server decision.
-  if (typeof execution?.terminal === 'boolean') return !execution.terminal;
-  if (status === 'termination_unconfirmed') return true;
-  return !terminal.has(status);
+  if (!execution) return false;
+  if (typeof execution.terminal === 'boolean') return !execution.terminal;
+  if (execution.status === 'termination_unconfirmed') return true;
+  return !terminal.has(execution.status);
 }
 
 export function currentEvaluation(job, evaluation) {

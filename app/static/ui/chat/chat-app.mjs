@@ -1,6 +1,7 @@
 import {el} from '../shared/dom.mjs';
 import {icon} from '../shared/icons.mjs';
 import {label} from './chat-copy.mjs';
+import {chatLive} from './chat-live.mjs';
 import {chatPreview} from './chat-stream.mjs';
 import {openModel, openSearch, openSettings} from './chat-dialogs.mjs';
 import {appMark, paintSidebar, sidebar} from './chat-nav.mjs';
@@ -35,8 +36,11 @@ let nodes;
 let selectionChanged = false;
 let navStamp;
 
-const engine = chatPreview({notify(chat, event) {
-  if (chat === selected && ['run_state', 'run_end', 'assistant_end'].includes(event.type)) {
+const params = new URLSearchParams(location.search);
+const previewMode = params.get('preview') === '1';
+
+function announce(chat, event) {
+  if (chat === selected && event && ['run_state', 'run_end', 'assistant_end'].includes(event.type)) {
     const status = event.payload.status ?? event.payload.execution;
     if (event.type === 'assistant_end') {
       const text = chat.events.filter(item => item.type === 'assistant_delta' &&
@@ -47,9 +51,15 @@ const engine = chatPreview({notify(chat, event) {
     }
   }
   if (nodes) requestPaint();
-}});
+}
 
-engine.seed(locale);
+const engine = previewMode ? chatPreview({notify: announce}) : chatLive({notify: announce});
+const requestedJob = params.get('job');
+Promise.resolve(engine.seed(locale)).then(() => {
+  if (!requestedJob) return;
+  const target = [...engine.chats.values()].find(chat => chat.jobId === requestedJob);
+  if (target) select(target);
+});
 selected = engine.create();
 const media = matchMedia('(max-width: 720px)');
 const systemTheme = matchMedia('(prefers-color-scheme: dark)');
@@ -60,9 +70,9 @@ const syncTheme = () => {
 };
 systemTheme.addEventListener('change', syncTheme);
 
-const currentDraft = () => drafts.get(selected.id) ?? {text: '', attachment: ''};
+const currentDraft = () => drafts.get(selected.id) ?? {text: '', attachment: '', file: null};
 const setDraft = updates => drafts.set(selected.id, {...currentDraft(), ...updates});
-const busy = chat => ['running', 'awaiting_user', 'cancel_requested'].includes(chat.phase);
+const busy = chat => ['running', 'awaiting_user', 'cancel_requested', 'queued', 'waiting_for_executor'].includes(chat.phase);
 const atEnd = () => nodes.scroll.scrollHeight - nodes.scroll.scrollTop - nodes.scroll.clientHeight < 60;
 function jump() {
   nodes.scroll.scrollTop = nodes.scroll.scrollHeight;
@@ -78,6 +88,7 @@ function requestPaint() {
 
 function select(chat, focusInput = false) {
   const changed = selected !== chat;
+  if (changed) engine.deactivate?.();
   selected = chat;
   selectionChanged ||= changed;
   nodes.navDialog.close();
@@ -89,6 +100,7 @@ function select(chat, focusInput = false) {
     nodes.hero.hidden = true;
     paint();
     resize();
+    if (chat.jobId) void engine.activate?.(chat);
   }
   if (focusInput) nodes.input.focus();
   else if (changed) nodes.scroll.focus({preventScroll: true});
@@ -101,7 +113,7 @@ function newChat() {
 
 function send(text) {
   if (!text.trim()) return;
-  engine.send(selected, text, locale, currentDraft().attachment);
+  engine.send(selected, text, locale, currentDraft().attachment, currentDraft().file);
   setDraft({text: '', attachment: ''});
   nodes.input.value = '';
   resize();
@@ -128,6 +140,7 @@ function preference(key, value) {
     return;
   }
   locale = value;
+  engine.setLocale?.(value);
   mount();
   nodes.language.focus();
 }
@@ -147,7 +160,9 @@ function mount() {
     };
     return {list, mobile, t, newChat, search: open(() => openSearch({t, engine, select})),
       settings: open(() => openSettings({t, locale, theme, preference})),
-      model: open(() => openModel({t, model, preference})), close: () => nodes.navDialog.close()};
+      model: open(() => openModel({t, model, preference})),
+      archive: open(() => { location.href = '/ui/'; }),
+      close: () => nodes.navDialog.close()};
   }
   const nav = sidebar(navArgs(list, false));
   const navDialog = el('dialog', {class: 'mobile-nav glass', id: 'mobile-conversations', 'aria-label': t('chats')},
@@ -167,10 +182,12 @@ function mount() {
     'aria-controls': 'execution-pane'});
   const execution = createExecution(t, () => changePane(false));
   const header = el('header', {class: 'chat-header'}, openNav, title,
-    el('span', {class: 'preview-label'}, el('span', {'aria-hidden': 'true'}), t('preview')), openExecution, language);
+    el('span', {class: 'preview-label'}, el('span', {'aria-hidden': 'true'}),
+      t(engine.live ? 'liveLabel' : 'preview')), openExecution, language);
   const hero = el('section', {class: 'empty-chat'},
     appMark('hero-mark'), el('h2', {}, t('empty')),
-    el('p', {}, t('help')), control(t('sample'), () => send(t('samplePrompt')), {glyph: 'arrow', tone: 'sample'}));
+    el('p', {}, t(engine.live ? 'helpLive' : 'help')),
+    engine.live ? null : control(t('sample'), () => send(t('samplePrompt')), {glyph: 'arrow', tone: 'sample'}));
   const log = el('div', {class: 'transcript', role: 'log', 'aria-live': 'off', 'aria-label': t('chats')});
   const scroll = el('div', {class: 'chat-scroll', tabindex: '0', onscroll: () => {
     if (nodes) nodes.latest.hidden = atEnd();
@@ -187,7 +204,8 @@ function mount() {
       }
     }});
   const file = el('input', {type: 'file', hidden: true, onchange: () => {
-    setDraft({attachment: file.files[0]?.name ?? ''});
+    const picked = file.files[0] ?? null;
+    setDraft({attachment: picked?.name ?? '', file: picked});
     file.value = '';
     paintComposer();
   }});
@@ -222,19 +240,22 @@ function mount() {
 function paintComposer() {
   const {input, stop, sendButton, queue, attach, attached} = nodes;
   const active = busy(selected);
-  input.placeholder = t(selected.events.length ? 'followup' : 'placeholder');
-  stop.hidden = !active;
+  const live = Boolean(selected.live);
+  const {attachment, file} = currentDraft();
+  input.placeholder = t(selected.phase === 'awaiting_user' ? 'approvalTurn' :
+    active ? 'waitingTurn' : selected.events.length ? 'followup' : 'placeholder');
+  input.readOnly = active && live;
+  stop.hidden = !active || !selected.run;
   stop.disabled = selected.phase === 'cancel_requested';
   sendButton.hidden = active;
-  sendButton.disabled = !input.value.trim();
-  queue.hidden = !active;
+  sendButton.disabled = !input.value.trim() || (live && !selected.jobId && !file);
+  queue.hidden = !active || live;
   queue.disabled = !input.value.trim();
-  const {attachment} = currentDraft();
-  attach.hidden = selected.events.length > 0;
+  attach.hidden = live ? Boolean(selected.jobId) : selected.events.length > 0;
   if (attached.dataset.filename !== attachment) {
     attached.dataset.filename = attachment;
     attached.replaceChildren(el('span', {}, icon('file', 15), attachment), control(t('remove'), () => {
-      setDraft({attachment: ''});
+      setDraft({attachment: '', file: null});
       paintComposer();
     }, {glyph: 'x', compact: true}));
   }

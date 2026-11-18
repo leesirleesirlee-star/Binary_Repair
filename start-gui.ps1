@@ -1,6 +1,6 @@
 # BinaryRepair GUI launcher (Windows PowerShell).
 # Creates .venv, installs requirements, generates a local session token, serves
-# http://127.0.0.1:8123/?token=... and opens the browser.
+# http://127.0.0.1:8123/welcome?token=... and opens the browser.
 $ErrorActionPreference = "Stop"
 $project = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $project
@@ -24,7 +24,7 @@ if (-not $token) {
 }
 $env:BINARYREPAIR_SESSION_TOKEN = $token
 $port = if ($env:BINARYREPAIR_PORT) { $env:BINARYREPAIR_PORT } else { "8123" }
-$url = "http://127.0.0.1:$port/?token=$token"
+$url = "http://127.0.0.1:$port/welcome?token=$token"
 
 Write-Host ""
 Write-Host " BinaryRepair Workbench" -ForegroundColor Cyan

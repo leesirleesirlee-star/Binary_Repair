@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
@@ -227,8 +227,16 @@ def _artifact_metadata(row: dict[str, Any], *, verify_hash: bool = False) -> dic
     problem = _artifact_problem(row, path, verify_hash=verify_hash)
     artifact_id = row["id"]
     job_id = str(row.get("job_id") or "")
+    run_id = row.get("run_id")
     return {
         "id": artifact_id,
+        "job_id": job_id,
+        "run_id": run_id,
+        "kind": (
+            "run_evidence" if row.get("attempt_id")
+            else "original_input" if row["role"] in {"original", "original_input"}
+            else "manual_deliverable"
+        ),
         "name": path.name if path else Path(str(row["relative_path"])).name,
         "role": row["role"],
         "sha256": row["sha256"],
@@ -780,6 +788,7 @@ def _snapshot(record: jobs.JobRecord, meta: dict[str, Any]) -> dict[str, Any]:
         "valid_tests": meta.get("valid_tests", []),
         "environment": meta.get("environment", ""),
         "created_at": record.created_at,
+        "manifest_sha256": meta.get("manifest_sha256"),
         "phase": record.phase,
         "cancelled": record.phase == "cancelled",
         "contract": contract,
@@ -933,6 +942,12 @@ async def create_job(
     return {"id": record.id, "original_sha256": record.original_sha256, "phase": record.phase}
 
 
+@app.get("/api/jobs")
+def list_job_summaries(limit: int = Query(50, ge=1, le=50)) -> dict[str, Any]:
+    """List local jobs newest first, bounded to 50 records."""
+    return {"jobs": jobs.list_jobs(data_dir=_data_dir(), limit=limit)}
+
+
 @app.get("/api/jobs/{job_id}")
 def get_snapshot(job_id: str) -> dict[str, Any]:
     record = _job_or_404(job_id)
@@ -940,7 +955,7 @@ def get_snapshot(job_id: str) -> dict[str, Any]:
 
 
 @app.post("/api/jobs/{job_id}/start", status_code=202)
-def start(job_id: str) -> dict[str, Any]:
+def start(job_id: str, request: Request) -> dict[str, Any]:
     record = _job_or_404(job_id)
     if record.phase == "cancelled":
         raise HTTPException(status_code=409, detail="Job is cancelled; a new job is required.")
@@ -974,16 +989,24 @@ def start(job_id: str) -> dict[str, Any]:
             reviewer_label=approval.reviewer_label,
             approved_at=approval.approved_at,
         )
+        key = (request.headers.get("idempotency-key") or "http-start-v1").strip()
+        if not key or len(key) > 128:
+            raise HTTPException(status_code=422, detail="Idempotency-Key must be 1-128 characters.")
         run = jobs.start_run(
             job_id,
             approval=approval,
-            idempotency_key="http-start-v1",
+            idempotency_key=key,
             data_dir=_data_dir(),
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    return {"id": run.id, "phase": run.phase}
+    return {
+        "id": run.id,
+        "run_id": run.id,
+        "phase": run.phase,
+        "created": run.created,
+    }
 
 
 @app.post("/api/jobs/{job_id}/cancel", status_code=202)
@@ -991,7 +1014,11 @@ def cancel(job_id: str) -> dict[str, Any]:
     try:
         record = jobs.cancel_job(job_id, data_dir=_data_dir())
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail="Job not found.") from exc
+        missing = str(exc).startswith("unknown job id")
+        raise HTTPException(
+            status_code=404 if missing else 409,
+            detail="Job not found." if missing else str(exc),
+        ) from exc
     return {"id": record.id, "phase": record.phase}
 
 
@@ -1375,6 +1402,68 @@ def job_attempts(job_id: str) -> dict[str, Any]:
         item["exit_code"] = None
         attempts.append(item)
     return {"available": True, "job_id": job_id, "attempts": attempts}
+
+
+@app.get("/api/jobs/{job_id}/runs/{run_id}/evaluation")
+def run_evaluation(job_id: str, run_id: str) -> dict[str, Any]:
+    """Evaluation for one authorized historical run.
+
+    The normal snapshot is latest-run only. This route lets the browser read a
+    run the job still owns without pretending it is the current one.
+    """
+    _job_or_404(job_id)
+    connection = connect(_data_dir())
+    try:
+        run = connection.execute(
+            "SELECT * FROM runs WHERE id = ? AND job_id = ?", (run_id, job_id)
+        ).fetchone()
+    finally:
+        connection.close()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found for this job.")
+
+    attempts = jobs.list_attempts(run_id, data_dir=_data_dir())
+    obligations: list[dict[str, Any]] = []
+    for attempt in attempts:
+        for row in jobs.list_obligations(attempt.id, data_dir=_data_dir()):
+            obligations.append(
+                {
+                    "route": attempt.route,
+                    "level": _GATE_BY_KIND.get(str(row["kind"]), str(row["kind"])),
+                    "status": row["result"],
+                    "reason_code": row["detail"] or None,
+                }
+            )
+    finalized = str(run["phase"]) in {"finished", "cancelled"} and bool(run["outcome"])
+    limitations: list[dict[str, str]] = []
+    if not finalized:
+        limitations.append(
+            {
+                "code": "evaluation_pending",
+                "detail": "This run has not committed a finalized evaluation.",
+            }
+        )
+    if any(row["status"] != "passed" for row in obligations):
+        limitations.append(
+            {
+                "code": "checks_incomplete",
+                "detail": "One or more recorded checks did not pass and are not evidence.",
+            }
+        )
+    return {
+        "job_id": job_id,
+        "run_id": run_id,
+        "available": bool(attempts or run["outcome"]),
+        "finalized": finalized,
+        "demo": False,
+        "data_source": "controller-http",
+        "verdict": {
+            "outcome": run["outcome"] if finalized else None,
+            "reason": run["reason"] if finalized else None,
+        },
+        "obligations": obligations,
+        "limitations": limitations,
+    }
 
 
 @app.get("/api/jobs/{job_id}/obligations")

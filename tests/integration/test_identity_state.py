@@ -182,6 +182,35 @@ def test_duplicate_start_is_idempotent(data_dir, elf_bytes) -> None:
     assert _field(first, "id", "run_id") == _field(second, "id", "run_id")
 
 
+def test_second_distinct_key_cannot_start_while_a_run_is_active(data_dir, elf_bytes) -> None:
+    """Contract v1 allows at most one nonterminal run per job."""
+    start_run = _require("start_run")
+    approve = _require("approve_contract")
+    record = _create_job(data_dir, elf_bytes)
+    approval = approve(
+        _field(record, "id", "job_id"),
+        input_sha256=_field(record, "original_sha256"),
+        contract_revision=1,
+        manifest_sha256="1" * 64,
+        scope_sha256="2" * 64,
+        reviewer_label="test",
+        data_dir=data_dir,
+    )
+    start_run(
+        _field(record, "id", "job_id"),
+        approval=approval,
+        idempotency_key="first-key",
+        data_dir=data_dir,
+    )
+    with pytest.raises(ValueError, match="already active"):
+        start_run(
+            _field(record, "id", "job_id"),
+            approval=approval,
+            idempotency_key="second-key",
+            data_dir=data_dir,
+        )
+
+
 def test_partial_output_is_not_evidence_after_restart(data_dir, elf_bytes) -> None:
     """An interrupted attempt must never be read back as a completed one."""
     get_job = _require("get_job")

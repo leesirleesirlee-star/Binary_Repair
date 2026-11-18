@@ -394,6 +394,14 @@ def start_run(
                 connection.commit()
                 return _run_record(existing, created=False)
 
+            active = connection.execute(
+                "SELECT id FROM runs WHERE job_id = ? "
+                "AND phase NOT IN ('finished', 'cancelled') LIMIT 1",
+                (job_id,),
+            ).fetchone()
+            if active is not None:
+                raise ValueError("a run is already active for this job")
+
             job = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
             if job is None:
                 raise ValueError(f"unknown job id: {job_id}")
@@ -568,7 +576,7 @@ def list_artifacts(job_id: str, *, data_dir: str | Path) -> list[dict[str, Any]]
     connection = connect(data_dir)
     try:
         rows = connection.execute(
-            "SELECT a.*, t.route FROM artifacts a "
+            "SELECT a.*, t.route, t.run_id FROM artifacts a "
             "LEFT JOIN attempts t ON t.id = a.attempt_id "
             "WHERE a.job_id = ? ORDER BY a.created_at, a.id",
             (job_id,),
@@ -581,6 +589,7 @@ def list_artifacts(job_id: str, *, data_dir: str | Path) -> list[dict[str, Any]]
             "job_id": row["job_id"],
             "attempt_id": row["attempt_id"],
             "route": row["route"],
+            "run_id": row["run_id"],
             "relative_path": row["relative_path"],
             "sha256": row["sha256"],
             "size_bytes": row["size_bytes"],
@@ -591,6 +600,37 @@ def list_artifacts(job_id: str, *, data_dir: str | Path) -> list[dict[str, Any]]
         for row in rows
     ]
 
+
+
+def list_jobs(*, data_dir: str | Path, limit: int = 50) -> list[dict[str, Any]]:
+    """Return job summaries newest first, with the latest run's outcome.
+
+    ``outcome`` is the latest persisted run outcome and stays ``None`` until a
+    run reaches a terminal state; it is not an evaluation projection.
+    """
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 50:
+        raise ValueError("limit must be an integer from 1 through 50")
+    connection = connect(data_dir)
+    try:
+        rows = connection.execute(
+            "SELECT j.id, j.defect_description, j.phase, j.created_at, "
+            " (SELECT r.outcome FROM runs r WHERE r.job_id = j.id "
+            "  ORDER BY r.started_at DESC, r.rowid DESC LIMIT 1) AS outcome "
+            "FROM jobs j ORDER BY j.created_at DESC, j.rowid DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    finally:
+        connection.close()
+    return [
+        {
+            "id": row["id"],
+            "defect": row["defect_description"],
+            "phase": row["phase"],
+            "created_at": row["created_at"],
+            "outcome": row["outcome"],
+        }
+        for row in rows
+    ]
 
 
 def _scope_for_kind(kind: str) -> str:
@@ -717,20 +757,41 @@ def retry_attempt(run_id: str, route: str, *, data_dir: str | Path) -> AttemptRe
 
 
 def cancel_job(job_id: str, *, data_dir: str | Path) -> JobRecord:
+    """Cancel the current nonterminal run, never a finished one.
+
+    The active-run guard is atomic with the update, so a concurrent worker
+    completion either commits first (and this call refuses) or the cancel
+    commits first (and a later completion cannot overwrite ``cancelled``).
+    """
     connection = connect(data_dir)
     try:
-        with connection:
-            row = connection.execute("SELECT id FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            row = connection.execute("SELECT phase FROM jobs WHERE id = ?", (job_id,)).fetchone()
             if row is None:
                 raise ValueError(f"unknown job id: {job_id}")
+            active = connection.execute(
+                "SELECT id, phase FROM runs WHERE job_id = ? "
+                "AND phase NOT IN ('finished', 'cancelled') "
+                "ORDER BY started_at DESC, rowid DESC LIMIT 1",
+                (job_id,),
+            ).fetchone()
+            if active is not None:
+                connection.execute(
+                    "UPDATE runs SET phase = 'cancelled', finished_at = ? "
+                    "WHERE id = ? AND phase NOT IN ('finished', 'cancelled')",
+                    (_now(), active["id"]),
+                )
+            elif row["phase"] not in {"draft", "queued", "awaiting_review", "cancelled"}:
+                raise ValueError("no active run to cancel")
             connection.execute(
                 "UPDATE jobs SET phase = 'cancelled', cancel_requested = 1 WHERE id = ?",
                 (job_id,),
             )
-            connection.execute(
-                "UPDATE runs SET phase = 'cancelled', finished_at = ? WHERE job_id = ?",
-                (_now(), job_id),
-            )
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
     finally:
         connection.close()
     record = get_job(job_id, data_dir=data_dir)

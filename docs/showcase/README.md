@@ -23,3 +23,17 @@ Additional current views:
 
 | `10-results-evidence.png` | result/evidence control room |
 | `11-ambient-light.png` | light ambient landing |
+
+## Welcome, conversation, archive (2026-11-18)
+
+The product now opens `/welcome`, runs the repair in `/ui/chat/`, and archives
+state and evidence in `/ui/`. These captures use the live controller and a
+synthetic worker result, so every state is real backend output rather than a
+fixture.
+
+| File | Page |
+|---|---|
+| `16-welcome.png` | `/welcome` entry page |
+| `17-chat.png` | `/ui/chat/` conversation for an archived task, with the archive link |
+| `18-archive.png` | `/ui/` archive list after the conversation flow |
+| `19-chat-contract.png` | `/ui/chat/` unapproved contract card with reviewer input |

@@ -23,6 +23,6 @@ TOKEN=$(cat var/session.token)
 export BINARYREPAIR_SESSION_TOKEN="$TOKEN"
 
 echo ""
-echo "  打开: http://127.0.0.1:${PORT}/?token=${TOKEN}"
+echo "  Open: http://127.0.0.1:${PORT}/welcome?token=${TOKEN}"
 echo ""
 exec "$VENV/bin/python" -m uvicorn app.main:app --host "$HOST" --port "$PORT"

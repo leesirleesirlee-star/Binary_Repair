@@ -7,5 +7,5 @@ if (-not (Test-Path $tokenFile)) {
     exit 1
 }
 $token = (Get-Content $tokenFile -Raw).Trim()
-Start-Process "http://127.0.0.1:8123/?token=$token"
+Start-Process "http://127.0.0.1:8123/welcome?token=$token"
 Write-Host "Opened the GUI with the stored session token." -ForegroundColor Green

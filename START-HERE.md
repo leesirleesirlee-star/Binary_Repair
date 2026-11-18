@@ -41,7 +41,7 @@ cd BinaryRepair-Workbench
 终端会打印类似：
 
 ```text
-http://127.0.0.1:8123/?token=...
+http://127.0.0.1:8123/welcome?token=...
 ```
 
 把这个**完整地址**复制到浏览器打开。token 只用于本机会话，不要发到公开群。

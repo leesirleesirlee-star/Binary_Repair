@@ -116,6 +116,10 @@ def test_run_requires_both_routes(tmp_path: Path) -> None:
         reviewer_label="test",
         data_dir=data_dir,
     )
+    # Contract v1 permits at most one nonterminal run per job. This test wants
+    # route A and route B verdicts from two runs, so retire run A first.
+    with connect(data_dir) as connection:
+        connection.execute("UPDATE runs SET phase = 'finished' WHERE id = ?", (run_a.id,))
     run_b = jobs.start_run(
         record.id,
         approval=approval,

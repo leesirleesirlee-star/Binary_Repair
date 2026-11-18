@@ -26,9 +26,12 @@ export function notice(message, className = '') {
 
 const statusStyle = {
   approved: ['good', 'check'], passed: ['good', 'check'],
+  success_within_scope: ['good', 'check'],
   waiting_for_executor: ['warning', 'clock'], queued: ['warning', 'clock'],
+  inconclusive: ['warning', 'info'], unsupported: ['neutral', 'info'],
   failed: ['bad', 'x'], rejected: ['bad', 'x'], error: ['bad', 'x'],
   not_run: ['neutral', 'slash'], unknown: ['unknown', 'info'],
+  cancelled: ['neutral', 'slash'],
   termination_unconfirmed: ['warning', 'info'],
 };
 

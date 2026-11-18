@@ -42,9 +42,15 @@ docs/operations/fixtures.md
 ## Reference
 
 ```text
+docs/interfaces/            browser contract v1 and implementation status
 docs/reference/interfaces/
 docs/reference/m5/
 ```
+
+The current frontend/backend handoff and the selected v1 browser contract are in
+`docs/handoff/2026-11-17-frontend-delivery.md`, `docs/handoff/2026-11-17-frontend-handoff.md`,
+`docs/handoff/2026-11-17-backend-handoff.md` and
+`docs/interfaces/frontend-backend-contract-v1.md`.
 
 ## Development records
 

@@ -29,6 +29,7 @@ const paths = {
   checkCircle: '<circle cx="12" cy="12" r="8"/><path d="m8 12 2.7 2.7L16 9"/>',
   branch: '<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="6" r="2"/><path d="M6 7v10m12-9a7 7 0 0 1-7 7H6"/>',
   thinking: '<path d="m12 3 1.8 6.2L20 11l-6.2 1.8L12 19l-1.8-6.2L4 11l6.2-1.8L12 3Zm6 13v4m-2-2h4"/>',
+  refresh: '<path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v4h-4"/>',
 };
 
 export function icon(name, size = 18) {

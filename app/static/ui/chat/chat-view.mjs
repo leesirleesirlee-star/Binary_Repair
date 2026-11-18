@@ -135,12 +135,18 @@ function approval(item, ctx) {
   const status = item.decision;
   const scope = chat.reviewScopes.get(p.request_id) ?? '';
   if (status === 'approve') {
-    const canStart = chat.startReady && item === ctx.latestApproval && ['completed', 'cancelled'].includes(chat.phase);
-    return el('div', {class: 'approval-complete'}, icon('check', 17), t('approved'),
+    const activeRun = chat.execution?.run_id && chat.execution?.terminal !== true;
+    const canStart = chat.startReady && !activeRun && !chat.execution?.run_id && item === ctx.latestApproval;
+    return el('div', {class: 'approval-complete'}, icon('check', 17),
+      t('approved') + (chat.reviewer ? ' · ' + chat.reviewer : ''),
       canStart ? control(t('start'), () => engine.start(chat, locale), {tone: 'primary'}) : null);
   }
-  if (status) return el('div', {class: 'activity'},
-    t(status === 'deny' ? 'denied' : status === 'edit' ? 'saveReview' : status));
+  if (status) {
+    const label = status === 'deny' ? t('denied') : status === 'edit' ? t('saveReview') : t(status);
+    return el('div', {class: 'activity'}, label,
+      status === 'deny' && engine.reopen
+        ? control(t('reviewAgain'), () => engine.reopen(chat)) : null);
+  }
 
   const form = el('form', {class: 'approval-edit', hidden: true, onsubmit: event => {
     event.preventDefault();
@@ -148,33 +154,52 @@ function approval(item, ctx) {
   }},
   el('label', {}, t('field'), el('textarea', {name: 'scope', value: scope, required: true, maxlength: '1000'})),
   control(t('saveReview'), null, {type: 'submit', tone: 'primary'}));
+  const reviewer = el('input', {name: 'reviewer', class: 'reviewer-input', placeholder: t('reviewer'),
+    autocomplete: 'off', value: chat.reviewer ?? ''});
+  const complete = Boolean(chat.contract?.review_binding_digest &&
+    chat.contract?.review_binding?.original_sha256 && chat.contract?.review_binding?.test_manifest_sha256);
   return el('section', {class: 'approval', 'aria-label': t('approval')},
     el('div', {class: 'approval-title'}, el('span', {class: 'approval-icon'}, icon('mark', 17)),
       el('h2', {}, t('approval')), chips(t('revision') + ' ' + p.binding.contract_revision)),
     el('p', {class: 'scope'}, scope),
-    detail(t('reviewFields'), el('p', {}, scope), el('code', {}, p.binding.contract_sha256)),
-    form, controlRow(control(t('edit'), () => {
+    detail(t('reviewFields'), el('p', {}, scope), el('code', {}, p.binding.contract_sha256),
+      complete ? null : el('p', {class: 'muted'}, t('bindingMissing'))),
+    form,
+    el('label', {class: 'reviewer-field'}, t('reviewer'), reviewer),
+    complete ? null : el('p', {class: 'muted'}, t('bindingMissing')),
+    controlRow(control(t('edit'), () => {
       form.hidden = !form.hidden;
       if (!form.hidden) form.elements.scope.focus();
     }),
     control(t('deny'), () => engine.decide(chat, p.request_id, 'deny')),
-    control(t('approve'), () => engine.decide(chat, p.request_id, 'approve'), {tone: 'primary'})));
+    control(t('approve'), () => {
+      const name = reviewer.value.trim();
+      if (!name) {
+        reviewer.focus();
+        return;
+      }
+      chat.reviewer = name;
+      engine.decide(chat, p.request_id, 'approve', null, name);
+    }, {tone: 'primary', disabled: !complete})));
 }
 
-function summary(item, t) {
+function summary(item, t, chat, engine) {
   const {payload: p, evaluation, checks} = item;
   const result = evaluation?.verdict?.outcome;
+  const archive = chat.jobId ? el('a', {class: 'control', href: '/ui/#task/' + encodeURIComponent(chat.jobId)},
+    icon('tasks', 16), t('openArchive')) : null;
+  const refresh = !evaluation && chat.jobId && engine.refresh
+    ? control(t('refresh'), () => engine.refresh(chat)) : null;
   return el('section', {class: 'summary-card'},
     el('header', {}, el('h2', {}, t('summary')), meta(seconds(p.duration_ms),
       p.steps_taken == null ? null : ' · ' + p.steps_taken + ' ' + t('steps'))),
-    el('strong', {}, result ?? (p.execution === 'cancelled' ? t('cancelled') : t('noVerdict'))),
+    el('strong', {}, result ? t(result) : (p.execution === 'cancelled' ? t('cancelled') : t('noVerdict'))),
     p.execution === 'failed' && !result ? el('p', {class: 'muted'}, t('reason')) : null,
     checks.length ? detail(t('checks'), checkRows(checks, t)) : null,
-    detail(t('evidence'), t('noEvidence')),
-    p.files_changed || p.ai?.tokens != null || p.ai?.cost_usd != null ? detail(t('details'),
-      p.files_changed ? el('p', {}, t('changes') + ' · ' + p.files_changed) : null,
-      p.ai.tokens != null ? el('p', {}, t('tokens') + ' · ' + p.ai.tokens) : null,
-      p.ai.cost_usd != null ? el('p', {}, t('cost') + ' · $' + p.ai.cost_usd) : null) : null);
+    detail(t('evidence'), el('p', {}, t('archiveHelp'))),
+    evaluation?.limitations?.length ? detail(t('details'), evaluation.limitations.map(row =>
+      el('p', {class: 'muted'}, row.code + ' — ' + row.detail))) : null,
+    el('div', {class: 'controls-row'}, archive, refresh));
 }
 
 export function renderItem(item, ctx) {
@@ -238,7 +263,7 @@ export function renderItem(item, ctx) {
         el('div', {class: 'error-action'}, t('reason'), p.retry.kind === 'manual' && chat.phase === 'failed' && chat.run === item.run_id ?
           control(t('retry'), () => engine.start(chat, locale, true)) : null),
         detail(t('details'), el('code', {}, p.code + ' · ' + p.correlation_id)));
-    case 'run_end': return summary(item, t);
+    case 'run_end': return summary(item, t, chat, engine);
   }
 }
 

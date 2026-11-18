@@ -29,7 +29,7 @@ class PreviewAssetsTest(unittest.TestCase):
         self.assertTrue(target.is_file(), path)
 
     def test_entry_pages_reference_local_assets(self):
-        for page in ("index.html", "workbench.html"):
+        for page in ("index.html", "chat/index.html"):
             with self.subTest(page=page):
                 assets = PageAssets()
                 assets.feed((UI_ROOT / page).read_text(encoding="utf-8"))
@@ -46,3 +46,7 @@ class PreviewAssetsTest(unittest.TestCase):
     def test_both_theme_icon_assets_are_present(self):
         for theme in ("light", "dark"):
             self.assert_local_file(UI_ROOT, f"assets/mark-{theme}.svg")
+
+    def test_welcome_assets_are_present(self):
+        for path in ("welcome/index.html", "welcome/welcome.css", "welcome/welcome.mjs"):
+            self.assert_local_file(UI_ROOT, path)

@@ -18,11 +18,13 @@ from pathlib import Path
 from urllib.parse import urlencode, urlparse
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import i18n, status
+from app import api_v1, i18n, status
 from app.backend import (
     BackendError,
     backend_description,
@@ -98,6 +100,7 @@ _UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
 app = FastAPI(title="BinaryRepair MVP - GUI slice")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+app.mount("/ui", StaticFiles(directory=BASE_DIR / "static" / "ui", html=True), name="ui")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
 templates.env.globals.update(
@@ -115,6 +118,7 @@ templates.env.globals.update(
 
 BACKEND = get_backend()
 BACKEND_MODE = backend_mode()
+app.include_router(api_v1.router)
 
 
 def _ascii_filename(name: str) -> str:
@@ -139,10 +143,105 @@ def _require_english(field: str, value: str) -> None:
         )
 
 
+_V1_CODE_BY_STATUS = {
+    400: "invalid_input",
+    401: "session_required",
+    403: "request_forbidden",
+    404: "not_found",
+    409: "invalid_transition",
+    413: "payload_too_large",
+    422: "invalid_input",
+    503: "capability_unavailable",
+}
+
+
+def _v1_error(status_code: int, detail: str, code: str | None = None) -> JSONResponse:
+    return JSONResponse(
+        {
+            "detail": detail,
+            "code": code or _V1_CODE_BY_STATUS.get(status_code, "request_failed"),
+            "correlation_id": secrets.token_hex(8),
+        },
+        status_code=status_code,
+    )
+
+
+@app.exception_handler(api_v1.ApiError)
+async def api_v1_error_handler(request: Request, exc: api_v1.ApiError) -> JSONResponse:
+    payload = {
+        "detail": exc.detail,
+        "code": exc.code,
+        "correlation_id": exc.correlation_id,
+    }
+    payload.update(exc.extra)
+    return JSONResponse(payload, status_code=exc.status_code)
+
+
 @app.exception_handler(BackendError)
 async def backend_error_handler(request: Request, exc: BackendError) -> JSONResponse:
     """Render backend failures as English JSON errors."""
+    if api_v1.is_v1(request):
+        return _v1_error(exc.status_code, exc.detail)
     return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_error_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    if api_v1.is_v1(request):
+        response = _v1_error(exc.status_code, str(exc.detail))
+        if getattr(exc, "headers", None):
+            response.headers.update(exc.headers)
+        return response
+    return JSONResponse(
+        {"detail": exc.detail},
+        status_code=exc.status_code,
+        headers=getattr(exc, "headers", None),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    if api_v1.is_v1(request):
+        return _v1_error(422, "One or more request fields are invalid.")
+    return JSONResponse({"detail": exc.errors()}, status_code=422)
+
+
+@app.middleware("http")
+async def contract_version_gate(request: Request, call_next):
+    """Select the v1 wire format and enforce upload/version limits.
+
+    Added after ``security_gate`` so it runs first: an unsupported version is a
+    stable ``400`` even when the session is missing.
+    """
+    version = request.headers.get(api_v1.VERSION_HEADER)
+    if version is not None:
+        if version != api_v1.CONTRACT_VERSION:
+            return JSONResponse(
+                {
+                    "detail": "Unsupported contract version.",
+                    "code": "unsupported_contract_version",
+                    "correlation_id": secrets.token_hex(8),
+                },
+                status_code=400,
+            )
+        request.state.v1 = True
+
+    if getattr(request.state, "v1", False):
+        content_length = request.headers.get("content-length")
+        if content_length and request.method in {"POST", "PUT", "PATCH"}:
+            try:
+                too_large = int(content_length) > api_v1.MAX_REQUEST_BYTES
+            except ValueError:
+                too_large = True
+            if too_large:
+                return _v1_error(413, "The request body exceeds the 24 MiB limit.", "payload_too_large")
+
+    response = await call_next(request)
+    if getattr(request.state, "v1", False):
+        response.headers[api_v1.VERSION_HEADER] = api_v1.CONTRACT_VERSION
+        response.headers["Vary"] = api_v1.VERSION_HEADER
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.middleware("http")
@@ -241,6 +340,17 @@ def _auth_required_page() -> str:
 </ol>
 <p class="hint">不要把登录地址发到公开位置。服务只监听本机回环地址，重启服务不会改变令牌。</p>
 </div></body></html>"""
+
+
+@app.get("/welcome", response_class=HTMLResponse, name="welcome_page")
+@app.get("/welcome/", response_class=HTMLResponse, include_in_schema=False)
+async def welcome_page():
+    """Product welcome page before the conversation and the archive."""
+    return FileResponse(
+        BASE_DIR / "static" / "ui" / "welcome" / "index.html",
+        media_type="text/html",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/", response_class=HTMLResponse, name="landing_page")
@@ -730,12 +840,14 @@ def _comparison_validate(job_id: str, payload: Any) -> dict:
 
 
 @app.get("/api/jobs/{job_id}/comparison")
-async def job_comparison(job_id: str):
+async def job_comparison(request: Request, job_id: str, run_id: str | None = None):
     """JSON comparison route used by the agent result screen.
 
     Missing artifact is an honest 200/not_provided. A present but unreadable,
     hash-mismatched or schema-invalid artifact is 200/invalid. Unknown job is 404.
     """
+    if api_v1.is_v1(request):
+        return JSONResponse(api_v1.comparison_payload(job_id, run_id))
     try:
         BACKEND.get_snapshot(job_id)
     except BackendError as exc:
@@ -917,18 +1029,22 @@ async def evidence_page(request: Request, job_id: str):
 
 
 @app.get("/api/jobs/{job_id}")
-async def job_status(job_id: str):
-    """Return the polling status JSON."""
+async def job_status(request: Request, job_id: str):
+    """Return the polling status JSON (v1 shape when the header is present)."""
+    if api_v1.is_v1(request):
+        return JSONResponse(api_v1.snapshot_payload(job_id))
     return JSONResponse(BACKEND.get_snapshot(job_id))
 
 
 @app.get("/api/jobs/{job_id}/evaluation")
-async def job_evaluation(job_id: str):
+async def job_evaluation(request: Request, job_id: str, run_id: str | None = None):
     """Read-only evidence observability scorecard.
 
     This endpoint never derives a verdict. It reports coverage, missing
     denominators and bottlenecks over whatever the controller returned.
     """
+    if api_v1.is_v1(request):
+        return JSONResponse(api_v1.evaluation_payload(job_id, run_id))
     try:
         snapshot = BACKEND.get_snapshot(job_id)
     except BackendError as exc:
@@ -987,12 +1103,14 @@ async def job_evaluation(job_id: str):
 
 
 @app.get("/api/jobs/{job_id}/attempts")
-async def job_attempts(job_id: str):
+async def job_attempts(request: Request, job_id: str, run_id: str | None = None):
     """Proxy M1's per-attempt history.
 
     ``available: false`` means the controller does not expose the endpoint yet;
     it is not the same as "this job has no attempts", and the UI says so.
     """
+    if api_v1.is_v1(request):
+        return JSONResponse(api_v1.attempts_payload(job_id, run_id))
     getter = getattr(BACKEND, "get_attempts", None)
     payload = getter(job_id) if getter is not None else None
     if payload is None:
@@ -1264,9 +1382,18 @@ async def overflow_knowledge_classify(request: Request) -> JSONResponse:
 
 
 @app.get("/api/assistant/key")
-async def assistant_key_status() -> JSONResponse:
+async def assistant_key_status(request: Request) -> JSONResponse:
     """Return masked key status; never return the key itself."""
-    return JSONResponse({"key": key_status(), "assistant": assistant_status()})
+    current = key_status()
+    if api_v1.is_v1(request):
+        # Contract 7.1: boolean status plus an allowlisted public provider id.
+        return JSONResponse(
+            {
+                "configured": bool(current.get("configured")),
+                "provider_id": "deepseek" if current.get("configured") else None,
+            }
+        )
+    return JSONResponse({"key": current, "assistant": assistant_status()})
 
 
 @app.post("/api/assistant/key")
@@ -1335,8 +1462,18 @@ async def assistant_key_clear(request: Request) -> JSONResponse:
 
 
 @app.get("/api/jobs/{job_id}/export")
-async def export_bundle(job_id: str):
-    """Export JSON v2 evidence (English ASCII; not production approval)."""
+async def export_bundle(request: Request, job_id: str, run_id: str | None = None):
+    """Export JSON evidence (English ASCII; not production approval)."""
+    if api_v1.is_v1(request):
+        payload = api_v1.export_payload(job_id, run_id)
+        body = json.dumps(payload, ensure_ascii=True, indent=2)
+        return Response(
+            content=body,
+            media_type="application/json",
+            headers={
+                "Content-Disposition": f'attachment; filename="{job_id}-evidence.json"',
+            },
+        )
     try:
         bundle = BACKEND.export_bundle(job_id)
     except BackendError as exc:
@@ -1353,8 +1490,10 @@ async def export_bundle(job_id: str):
 
 
 @app.get("/api/jobs/{job_id}/artifacts")
-async def job_artifacts(job_id: str):
+async def job_artifacts(request: Request, job_id: str):
     """Proxy the job artifact list so the result screen can link deliverables."""
+    if api_v1.is_v1(request):
+        return JSONResponse(api_v1.artifacts_payload(job_id))
     return JSONResponse(BACKEND.get_artifacts(job_id))
 
 
@@ -1373,17 +1512,31 @@ async def upload_deliverable(request: Request, job_id: str, file: UploadFile = F
             status_code=404,
             detail="Deliverable upload is only available in controller (http) mode.",
         )
-    payload = await file.read()
+    if api_v1.is_v1(request):
+        payload = await file.read(api_v1.MAX_FILE_BYTES + 1)
+        if len(payload) > api_v1.MAX_FILE_BYTES:
+            raise HTTPException(status_code=413, detail="Uploaded file exceeds the 20 MiB limit.")
+        if not payload:
+            raise HTTPException(status_code=422, detail="Uploaded file is empty.")
+    else:
+        payload = await file.read()
     try:
         result = uploader(job_id, filename=file.filename or "repaired.elf", content=payload)
     except BackendError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    if api_v1.is_v1(request):
+        artifact = result.get("artifact") if isinstance(result, dict) else None
+        if not isinstance(artifact, dict):
+            raise HTTPException(status_code=502, detail="The controller returned no artifact metadata.")
+        return JSONResponse(api_v1.artifact_view(artifact, job_id, None, 0), status_code=201)
     return JSONResponse(result, status_code=201)
 
 
 @app.get("/api/artifacts/{artifact_id}")
-async def artifact_metadata(artifact_id: str):
+async def artifact_metadata(request: Request, artifact_id: str):
     """Proxy artifact metadata so evidence pages work against the controller."""
+    if api_v1.is_v1(request):
+        return JSONResponse(api_v1.artifact_payload(artifact_id))
     getter = getattr(BACKEND, "get_artifact_metadata", None)
     if getter is None:
         raise HTTPException(
