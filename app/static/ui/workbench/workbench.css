@@ -88,6 +88,8 @@
   .rail { position: sticky; top: 0; height: 100dvh; display: flex; flex-direction: column; gap: 18px; padding: 20px 14px 14px; background: var(--sidebar); border-inline-end: 1px solid var(--line); }
   .rail-top, .recent, .rail-footer, .stack, form { display: grid; gap: 8px; }
   .recent { align-content: start; overflow-y: auto; overflow-x: hidden; min-height: 0; }
+  .workspace-links { display: grid; gap: .15rem; }
+  .empty .primary { margin-top: .5rem; }
   .rail-footer { margin-top: auto; padding-top: 10px; border-top: 1px solid var(--line); }
   .brand { display: flex; align-items: center; gap: 10px; padding: 0 6px 14px; font-size: 15px; font-weight: 650; letter-spacing: -.014em; text-decoration: none; color: var(--text); }
   .brand-mark { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; background: var(--text); color: var(--bg); }

@@ -4,7 +4,7 @@
 // check and verdict comes from an API response. The only locally authored text
 // is a short status sentence derived from those values, and it is labelled as a
 // local summary, never as a model answer.
-import {live} from '../workbench/api.mjs';
+import {currentEvaluation, live} from '../workbench/api.mjs';
 import {label} from './chat-copy.mjs';
 
 const newId = () => crypto.randomUUID();
@@ -305,12 +305,13 @@ export function chatLive({notify = () => {}} = {}) {
     const contract = snapshot.contract || {};
     const execution = snapshot.execution || {};
     chat.jobId = snapshot.id;
+    chat.demo = snapshot.demo;
     chat.title = snapshot.defect || chat.title;
     chat.filename = snapshot.filename || chat.filename;
     chat.contract = contract;
     chat.execution = execution;
     chat.data = {
-      evaluation: payload.evaluation ?? chat.data?.evaluation ?? null,
+      evaluation: currentEvaluation(snapshot, payload.evaluation ?? chat.data?.evaluation),
       attempts: payload.attempts ?? chat.data?.attempts ?? [],
       artifacts: payload.artifacts ?? chat.data?.artifacts ?? [],
       comparison: payload.comparison ?? chat.data?.comparison ?? null,

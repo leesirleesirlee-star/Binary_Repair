@@ -7,8 +7,9 @@ export function shell(ctx) {
   const rail = el('aside', {class: 'rail', id: 'task-navigation'},
     el('div', {class: 'rail-top'},
       el('a', {class: 'brand', href: '#tasks'}, el('span', {class: 'brand-mark'}, icon('mark', 21)), 'BinaryRepair'),
-      el('a', {class: 'button subtle', href: '/ui/chat/'}, icon('chat', 16), t('openChat')),
-      el('nav', {'aria-label': t('workspace')}, el('a', {class: 'nav-link', href: '#tasks', 'aria-current': current(!id)},
+      el('nav', {class: 'workspace-links', 'aria-label': t('workspace')},
+        el('a', {class: 'nav-link', href: '/ui/chat/'}, icon('chat', 16), t('openChat')),
+        el('a', {class: 'nav-link', href: '#tasks', 'aria-current': current(!id)},
         icon('tasks', 16), t('tasks')))),
     jobs.length ? el('nav', {class: 'recent', 'aria-label': t('recent')},
       el('p', {class: 'rail-label'}, t('recent')),
@@ -23,8 +24,8 @@ export function shell(ctx) {
       el('span', {class: 'muted'}, t('workspace'))),
     el('div', {class: 'top-right'},
       el('a', {class: 'button subtle', href: '/ui/chat/'}, icon('chat', 16), t('openChat')),
-      button(null, search, {glyph: 'search', className: 'icon subtle', 'aria-label': t('search'), title: t('search') + ' (Ctrl+K)'}),
-      button(language === 'en' ? '中文' : 'English', switchLanguage, {className: 'subtle',
+      jobs.length ? button(null, search, {glyph: 'search', className: 'icon subtle', 'aria-label': t('search'), title: t('search') + ' (Ctrl+K)'}) : null,
+      button(language === 'en' ? '中文' : 'EN', switchLanguage, {className: 'subtle',
         lang: language === 'en' ? 'zh-Hans' : 'en'}),
       button(null, settings, {glyph: 'settings', className: 'icon subtle mobile-toggle', 'aria-label': t('settings')})));
   const main = el('main', {id: 'main', tabindex: '-1'},
@@ -52,6 +53,12 @@ export function tasksView(ctx) {
         el('a', {class: 'button', href: preview.pathname + preview.search}, t('previewLink'))));
   }
 
+  const heading = el('div', {class: 'heading'}, el('h1', {}, t('tasks')), el('p', {class: 'stat'}, t('archiveIntro')));
+  const newRepair = el('a', {class: 'button primary', href: '/ui/chat/'}, icon('plus', 16), t('create'));
+  if (!jobs.length) {
+    return el('div', {class: 'page'}, heading, el('div', {class: 'card empty', id: 'task-results'},
+      el('h2', {}, t('empty')), el('p', {class: 'muted'}, t('emptyHelp')), newRepair));
+  }
   const results = el('div', {class: 'card', id: 'task-results'});
   const filterButtons = ['all', 'active', 'finished'].map(value => button(t(value === 'finished' ? 'archived' : value), event => {
     setFilter(value);
@@ -65,8 +72,7 @@ export function tasksView(ctx) {
     results.replaceChildren(
       visible.length ? el('div', {class: 'table-head'}, el('span', {}, t('description')),
         el('span', {}, t('status')), el('span', {}, t('updated')), el('span')) :
-        el('div', {class: 'empty'}, el('h2', {}, t(jobs.length ? 'noMatches' : 'empty')),
-          jobs.length ? null : el('p', {class: 'muted'}, t('emptyHelp'))),
+        el('div', {class: 'empty'}, el('h2', {}, t('noMatches'))),
       ...visible.map(job => el('a', {class: 'task-row', href: taskHref(job.id)}, el('span', {class: 'task-title'},
         job.defect || job.id, el('small', {class: 'mono'}, job.id)),
         el('span', {class: 'inline'}, badge(phase(job), t), job.outcome ? badge(job.outcome, t) : null),
@@ -74,9 +80,7 @@ export function tasksView(ctx) {
   };
   update();
   return el('div', {class: 'page'},
-    el('div', {class: 'section-head'}, el('div', {class: 'heading'},
-      el('h1', {}, t('tasks')), el('p', {class: 'stat'}, t('archiveIntro'))),
-      el('a', {class: 'button primary', href: '/ui/chat/'}, icon('plus', 16), t('create'))),
+    el('div', {class: 'section-head'}, heading, newRepair),
     el('div', {class: 'controls'},
       el('div', {class: 'segments', role: 'group', 'aria-label': t('filterLabel')}, filterButtons),
       el('div', {class: 'search'}, icon('search', 15), input)),

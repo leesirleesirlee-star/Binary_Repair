@@ -99,6 +99,7 @@
   .empty-chat h2 { font-size: clamp(1.95rem, 5vw, 3.15rem); line-height: 1.1; font-weight: 680; letter-spacing: -.047em; }
   :lang(zh-Hans) .empty-chat h2 { letter-spacing: -.015em; }
   .empty-chat p { color: var(--muted); font-size: .93rem; margin-top: .5rem; }
+  .hero-attach { margin-top: 1.25rem; min-height: 2.85rem; padding-inline: 1.25rem; font-size: .94rem; }
   .sample { margin-top: 1.1rem; border-color: var(--line); background: var(--surface); font-weight: 540; }
   .sample svg { order: 1; color: var(--accent); }
   .composer-wrap { width: min(100%, calc(var(--column) + 2.2rem)); justify-self: center; padding: .55rem 1.1rem max(1rem, env(safe-area-inset-bottom)); position: relative; }
@@ -106,6 +107,8 @@
   .composer:focus-within { border-color: color-mix(in srgb, var(--accent) 48%, var(--line)); }
   .composer textarea { resize: none; min-width: 0; width: 100%; border: none; background: transparent; outline: none; min-height: 1.8rem; max-height: 148px; padding: .18rem .35rem; line-height: 1.55; font-size: .96rem; }
   .composer textarea::placeholder { color: var(--muted); }
+  .composer-feedback { padding-inline: .35rem; color: var(--muted); font-size: .8rem; }
+  .composer-feedback:empty { position: absolute; }
   .composer-tools { display: flex; gap: .38rem; align-items: center; flex-wrap: wrap; }
   .composer-tools .spacer { flex: 1; }
   .composer-tools .send-button { border-radius: 50%; }

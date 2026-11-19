@@ -1,6 +1,7 @@
 import {el} from '../shared/dom.mjs';
 import {icon} from '../shared/icons.mjs';
 import {control} from './chat-view.mjs';
+import {createProgress} from './chat-progress.mjs';
 import {createStepGroups, disclosure} from './chat-steps.mjs';
 
 export const activityTypes = new Set(['thinking', 'plan_update', 'tool_call', 'file_change',
@@ -38,14 +39,22 @@ export function createExecution(t, showConversation) {
     branches,
     el('section', {class: 'trace'}, el('h3', {}, t('activity')), empty, log));
 
+  const progress = createProgress(t);
+  const inspect = control(t('details'), () => {
+    const workspace = panel.closest('.workspace');
+    const expanded = workspace.classList.toggle('inspect-before-run');
+    inspect.setAttribute('aria-expanded', String(expanded));
+  }, {tone: 'inspect-before-run-button', 'aria-controls': 'execution-content', 'aria-expanded': 'false'});
+  scroll.id = 'execution-content';
   const panel = el('section', {class: 'execution-pane glass', id: 'execution-pane', 'aria-labelledby': 'execution-heading'},
     el('header', {class: 'execution-head'}, el('div', {class: 'panel-heading'},
       icon('terminal', 18), el('h2', {id: 'execution-heading'}, t('execution'))),
-    control(t('conversation'), showConversation, {glyph: 'chat', tone: 'compact-only'})),
-    scroll);
+    inspect, control(t('conversation'), showConversation, {glyph: 'chat', tone: 'compact-only'})),
+    progress.panel, scroll);
 
   let stamp;
   function update(chat, items) {
+    progress.update(chat);
     const plan = items.findLast(item => item.run_id === chat.run && item.type === 'plan_update');
     const state = chat.phase === 'idle' ? 'noRun' : phases[chat.phase] ?? chat.phase;
     const steps = plan?.payload.steps;
@@ -88,7 +97,7 @@ export function createExecution(t, showConversation) {
       if (restoreFocus) node.querySelector('summary').focus({preventScroll: true});
     });
   }
-  return {panel, metrics, log, groups, scroll, update, clock};
+  return {panel, metrics, log, groups, scroll, update, clock, inspect};
 }
 
 export function elapsed(node) {

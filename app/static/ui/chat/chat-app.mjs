@@ -1,5 +1,7 @@
-import {el} from '../shared/dom.mjs';
+import {el, isAscii} from '../shared/dom.mjs';
+import {saveLanguage, takeDraft} from '../shared/handoff.mjs';
 import {icon} from '../shared/icons.mjs';
+import {getTheme, setTheme} from '../shared/theme.mjs';
 import {label} from './chat-copy.mjs';
 import {chatLive} from './chat-live.mjs';
 import {chatPreview} from './chat-stream.mjs';
@@ -24,7 +26,6 @@ function readPreference(key, allowed, fallback) {
 }
 
 let locale = readPreference('language', ['en', 'zh-Hans'], 'en');
-let theme = readPreference('theme', ['system', 'light', 'dark'], 'dark');
 let model = readPreference('model', ['default', 'deepseek-flash', 'deepseek-v4-pro'], 'default');
 let stopSpring = () => {};
 const t = (key, count) => label(locale, key, count);
@@ -61,14 +62,11 @@ Promise.resolve(engine.seed(locale)).then(() => {
   if (target) select(target);
 });
 selected = engine.create();
+if (!requestedJob && !previewMode) {
+  const text = takeDraft();
+  if (text) drafts.set(selected.id, {text, attachment: '', file: null});
+}
 const media = matchMedia('(max-width: 720px)');
-const systemTheme = matchMedia('(prefers-color-scheme: dark)');
-const syncTheme = () => {
-  const resolved = theme === 'system' ? (systemTheme.matches ? 'dark' : 'light') : theme;
-  root.dataset.theme = resolved;
-  document.querySelector('link[rel="icon"]').href = './assets/mark-' + resolved + '.svg';
-};
-systemTheme.addEventListener('change', syncTheme);
 
 const currentDraft = () => drafts.get(selected.id) ?? {text: '', attachment: '', file: null};
 const setDraft = updates => drafts.set(selected.id, {...currentDraft(), ...updates});
@@ -94,6 +92,7 @@ function select(chat, focusInput = false) {
   nodes.navDialog.close();
   if (changed) {
     nodes.input.value = currentDraft().text;
+    nodes.composerFeedback.textContent = '';
     nodes.rows.clear();
     nodes.log.replaceChildren();
     nodes.execution.groups.clear();
@@ -112,9 +111,15 @@ function newChat() {
 }
 
 function send(text) {
-  if (!text.trim()) return;
-  engine.send(selected, text, locale, currentDraft().attachment, currentDraft().file);
-  setDraft({text: '', attachment: ''});
+  if (!text.trim() || (engine.live && busy(selected))) return;
+  const {attachment, file} = currentDraft();
+  if (engine.live && !selected.jobId && (!file || !isAscii(text.trim()))) {
+    nodes.composerFeedback.textContent = t(file ? 'asciiDefect' : 'needFile');
+    return;
+  }
+  nodes.composerFeedback.textContent = '';
+  engine.send(selected, text, locale, attachment, file);
+  setDraft({text: '', attachment: '', file: null});
   nodes.input.value = '';
   resize();
   paint();
@@ -129,17 +134,17 @@ function resize() {
 }
 
 function preference(key, value) {
-  try { localStorage.setItem('binaryrepair.chat.' + key, value); } catch { /* Retain the selection in this tab. */ }
   if (key === 'theme') {
-    theme = value;
-    syncTheme();
+    setTheme(value);
     return;
   }
+  try { localStorage.setItem('binaryrepair.chat.' + key, value); } catch { /* Retain the selection in this tab. */ }
   if (key === 'model') {
     model = value;
     return;
   }
   locale = value;
+  saveLanguage(value);
   engine.setLocale?.(value);
   mount();
   nodes.language.focus();
@@ -147,7 +152,6 @@ function preference(key, value) {
 
 function mount() {
   root.lang = locale;
-  syncTheme();
   stopSpring();
   document.querySelector('#skip').textContent = t('skip');
   const previousScroll = nodes?.scroll.scrollTop;
@@ -158,8 +162,8 @@ function mount() {
       if (mobile) nodes.navDialog.close();
       callback();
     };
-    return {list, mobile, t, newChat, search: open(() => openSearch({t, engine, select})),
-      settings: open(() => openSettings({t, locale, theme, preference})),
+    return {list, mobile, t, newChat: open(newChat), conversation: open(() => nodes.input.focus()), search: open(() => openSearch({t, engine, select})),
+      settings: open(() => openSettings({t, locale, theme: getTheme(), preference})),
       model: open(() => openModel({t, model, preference})),
       archive: open(() => { location.href = '/ui/'; }),
       close: () => nodes.navDialog.close()};
@@ -175,7 +179,7 @@ function mount() {
     openNav.setAttribute('aria-expanded', 'false');
     if (media.matches && document.activeElement === document.body) openNav.focus();
   });
-  const language = control(locale === 'en' ? '中文' : 'English',
+  const language = control(locale === 'en' ? '中文' : 'EN',
     () => preference('language', locale === 'en' ? 'zh-Hans' : 'en'), {lang: locale === 'en' ? 'zh-Hans' : 'en'});
   const title = el('h1', {class: 'chat-title'});
   const openExecution = control(t('execution'), () => changePane(true), {glyph: 'terminal', tone: 'compact-only',
@@ -184,33 +188,40 @@ function mount() {
   const header = el('header', {class: 'chat-header'}, openNav, title,
     el('span', {class: 'preview-label'}, el('span', {'aria-hidden': 'true'}),
       t(engine.live ? 'liveLabel' : 'preview')), openExecution, language);
+  const heroAttach = engine.live
+    ? control(t('attachBinary'), () => file.click(), {glyph: 'file', tone: 'primary hero-attach'})
+    : null;
   const hero = el('section', {class: 'empty-chat'},
     appMark('hero-mark'), el('h2', {}, t('empty')),
     el('p', {}, t(engine.live ? 'helpLive' : 'help')),
-    engine.live ? null : control(t('sample'), () => send(t('samplePrompt')), {glyph: 'arrow', tone: 'sample'}));
+    heroAttach ?? control(t('sample'), () => send(t('samplePrompt')), {glyph: 'arrow', tone: 'sample'}));
   const log = el('div', {class: 'transcript', role: 'log', 'aria-live': 'off', 'aria-label': t('chats')});
   const scroll = el('div', {class: 'chat-scroll', tabindex: '0', onscroll: () => {
     if (nodes) nodes.latest.hidden = atEnd();
   }}, hero, log);
+  const composerFeedback = el('p', {class: 'composer-feedback', role: 'status'});
   const input = el('textarea', {rows: '1', value: currentDraft().text, maxlength: '4000',
     'aria-label': t('composer'), oninput: () => {
       setDraft({text: input.value});
+      composerFeedback.textContent = '';
       resize();
       paintComposer();
     }, onkeydown: event => {
       if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
         event.preventDefault();
-        send(input.value);
+        input.form.requestSubmit();
       }
     }});
   const file = el('input', {type: 'file', hidden: true, onchange: () => {
     const picked = file.files[0] ?? null;
     setDraft({attachment: picked?.name ?? '', file: picked});
     file.value = '';
+    composerFeedback.textContent = '';
     paintComposer();
+    if (picked) input.focus({preventScroll: true});
   }});
   const attached = el('div', {class: 'attached', hidden: true});
-  const attach = control(t('attach'), () => file.click(), {glyph: 'plus', compact: true});
+  const attach = control(t(engine.live ? 'attachBinary' : 'attach'), () => file.click(), {glyph: 'plus'});
   const stop = control(t('stop'), () => engine.stop(selected), {glyph: 'stop', tone: 'stop'});
   const sendButton = control(t('send'), null, {type: 'submit', glyph: 'up', compact: true, tone: 'primary send-button'});
   const queue = control(t('queue'), null, {type: 'submit', tone: 'queue'});
@@ -218,7 +229,7 @@ function mount() {
   const composer = el('form', {class: 'composer', onsubmit: event => {
     event.preventDefault();
     send(input.value);
-  }}, attached, input, el('div', {class: 'composer-tools'}, file, attach, el('span', {class: 'spacer'}), stop, queue, sendButton));
+  }}, attached, input, composerFeedback, el('div', {class: 'composer-tools'}, file, attach, el('span', {class: 'spacer'}), stop, queue, sendButton));
 
   const left = el('section', {class: 'chat-main glass'}, el('div', {}, header, execution.metrics), scroll,
     el('footer', {class: 'composer-wrap'}, latest, composer));
@@ -230,7 +241,9 @@ function mount() {
   const rail = el('aside', {class: 'desktop-nav glass'}, nav.body);
   app.replaceChildren(el('div', {class: 'chat-shell'}, rail, workspace, navDialog));
   stopSpring = bindSidebarSpring(rail, nav.toggle);
-  nodes = {rows: new Map(), list, mobileList, title, hero, log, scroll, input, latest, attach, attached, stop, sendButton, queue, language, navDialog, execution};
+  nodes = {rows: new Map(), list, mobileList, title, hero, heroAttach, log, scroll, input, composerFeedback,
+    latest, attach, attached, stop, sendButton, queue, language, navDialog, execution};
+  nodes.workspace = workspace;
   navStamp = null;
   paint();
   resize();
@@ -238,7 +251,7 @@ function mount() {
 }
 
 function paintComposer() {
-  const {input, stop, sendButton, queue, attach, attached} = nodes;
+  const {input, stop, sendButton, queue, hero, heroAttach, attach, attached} = nodes;
   const active = busy(selected);
   const live = Boolean(selected.live);
   const {attachment, file} = currentDraft();
@@ -251,12 +264,15 @@ function paintComposer() {
   sendButton.disabled = !input.value.trim() || (live && !selected.jobId && !file);
   queue.hidden = !active || live;
   queue.disabled = !input.value.trim();
-  attach.hidden = live ? Boolean(selected.jobId) : selected.events.length > 0;
+  const showHeroAttach = live && !hero.hidden && !file && !selected.jobId;
+  if (heroAttach) heroAttach.hidden = !showHeroAttach;
+  attach.hidden = live ? showHeroAttach || Boolean(selected.jobId) : selected.events.length > 0;
   if (attached.dataset.filename !== attachment) {
     attached.dataset.filename = attachment;
     attached.replaceChildren(el('span', {}, icon('file', 15), attachment), control(t('remove'), () => {
       setDraft({attachment: '', file: null});
       paintComposer();
+      (heroAttach && !heroAttach.hidden ? heroAttach : input).focus();
     }, {glyph: 'x', compact: true}));
   }
   attached.hidden = !attachment;
@@ -270,6 +286,13 @@ function paint() {
   navStamp = paintSidebar({chats: engine.chats, selected, lists: [nodes.list, nodes.mobileList], navStamp, t, select});
   nodes.title.textContent = displayTitle(selected, t);
   nodes.hero.hidden = selected.events.length > 0;
+  const beforeRun = selected.live ? !selected.execution?.run_id : selected.kind !== 'repair';
+  nodes.workspace.classList.toggle('before-run', beforeRun);
+  if (nodes.workspace.dataset.chat !== selected.id || !beforeRun) {
+    nodes.workspace.classList.remove('inspect-before-run');
+    nodes.execution.inspect.setAttribute('aria-expanded', 'false');
+    nodes.workspace.dataset.chat = selected.id;
+  }
   if (!projections.has(selected.id)) projections.set(selected.id, transcript());
   const items = [...projections.get(selected.id).apply(selected.events)];
   nodes.execution.update(selected, items);

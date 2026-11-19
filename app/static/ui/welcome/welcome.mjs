@@ -1,4 +1,8 @@
-// Welcome page: a single language switch that also seeds the two app pages.
+import {saveDraft, saveLanguage} from '../shared/handoff.mjs';
+import '../shared/theme.mjs';
+
+const form = document.querySelector('.composer-card');
+const draft = document.querySelector('#draft');
 const root = document.documentElement;
 const button = document.querySelector('#language');
 const KEY = 'binaryrepair.welcome.language';
@@ -23,26 +27,38 @@ function apply(language) {
   }
   button.textContent = language === 'en' ? '中文' : 'EN';
   button.setAttribute('aria-label', language === 'en' ? '切换到中文' : 'Switch to English');
-  try {
-    localStorage.setItem(KEY, language);
-    localStorage.setItem('binaryrepair.chat.language', language);
-    localStorage.setItem('binaryrepair.ui.language', language);
-  } catch {
-    // The visible language still changes for this page.
-  }
+  draft.placeholder = language === 'en' ? 'Describe the defect…' : '描述缺陷…';
+  draft.setAttribute('aria-label', draft.placeholder);
+  saveLanguage(language);
 }
 
 let language = read();
 apply(language);
-try {
-  const theme = localStorage.getItem('binaryrepair.chat.theme') ||
-    localStorage.getItem('binaryrepair.ui.theme');
-  if (theme === 'light' || theme === 'dark') root.dataset.theme = theme;
-} catch {
-  // Keep the system theme.
-}
 button.addEventListener('click', () => {
   language = language === 'en' ? 'zh-Hans' : 'en';
   apply(language);
   button.focus();
+});
+
+form.addEventListener('submit', event => {
+  event.preventDefault();
+  try {
+    saveDraft(draft.value);
+  } catch {
+    if (draft.value) {
+      const error = document.querySelector('#draft-error');
+      error.textContent = language === 'en'
+        ? 'Copy your draft before continuing. Browser storage is unavailable.'
+        : '浏览器无法暂存草稿，请先复制内容，再清空输入框进入对话。';
+      error.hidden = false;
+      return;
+    }
+  }
+  location.assign(form.action);
+});
+draft.addEventListener('keydown', event => {
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
+    event.preventDefault();
+    form.requestSubmit();
+  }
 });

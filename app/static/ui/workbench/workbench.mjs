@@ -1,3 +1,5 @@
+import {saveLanguage} from '../shared/handoff.mjs';
+import {getTheme, setTheme} from '../shared/theme.mjs';
 import {live, shouldPoll} from './api.mjs';
 import {button, el, notice, taskHref} from '../shared/dom.mjs';
 import {translate} from './labels.mjs';
@@ -7,8 +9,8 @@ import {createDialog, searchDialog, settingsDialog, shell, tasksView} from './vi
 const previewMode = new URLSearchParams(location.search).get('preview') === '1';
 const api = previewMode ? (await import('./preview.mjs')).preview : {...live, lifecycle: false};
 const app = document.querySelector('#app');
-const preferences = {language: 'en', theme: 'system', density: 'comfortable'};
-const preferenceValues = {language: ['en', 'zh-Hans'], theme: ['system', 'light', 'dark'], density: ['comfortable', 'compact']};
+const preferences = {language: 'en', density: 'comfortable'};
+const preferenceValues = {language: ['en', 'zh-Hans'], density: ['comfortable', 'compact']};
 for (const [key, choices] of Object.entries(preferenceValues)) {
   try {
     const saved = localStorage.getItem('binaryrepair.ui.' + key);
@@ -28,16 +30,21 @@ let taskRequestRunning = false;
 let failures = 0;
 
 function setPreference(key, value) {
+  if (key === 'theme') {
+    setTheme(value);
+    return;
+  }
   preferences[key] = value;
   try { localStorage.setItem('binaryrepair.ui.' + key, value); } catch { /* Session-only preference. */ }
-  if (key === 'language') render();
-  else reflectPreferences();
+  if (key === 'language') {
+    saveLanguage(value);
+    render();
+  } else reflectPreferences();
 }
 
 function reflectPreferences() {
   const root = document.documentElement;
   root.lang = preferences.language;
-  root.dataset.theme = preferences.theme;
   root.dataset.density = preferences.density;
   document.querySelector('#skip').textContent = t('skip');
 }
@@ -85,7 +92,7 @@ function render({focus = false, mainOnly = false} = {}) {
     setFilter: value => { state.filter = value; },
     setQuery: value => { state.query = value; },
     search: () => searchDialog({t, jobs: state.jobs, navigate}),
-    settings: () => settingsDialog({t, preferences, setPreference, provider: state.provider}),
+    settings: () => settingsDialog({t, preferences: {...preferences, theme: getTheme()}, setPreference, provider: state.provider}),
     switchLanguage: () => {
       setPreference('language', preferences.language === 'en' ? 'zh-Hans' : 'en');
       app.querySelector('.top-right button[lang]')?.focus();

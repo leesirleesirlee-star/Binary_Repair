@@ -152,19 +152,18 @@ h1 {
   text-decoration: none; text-align: start; color: var(--ink);
   transition: transform 160ms cubic-bezier(.23, 1, .32, 1), box-shadow 160ms ease, border-color 160ms ease;
 }
-.composer-card:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); box-shadow: 0 1.8rem 4.6rem rgba(47, 52, 120, .2); }
-.composer-placeholder { color: var(--muted); font-size: clamp(.95rem, 1.3vw, 1.05rem); }
-.composer-bottom { display: flex; align-items: center; flex-wrap: wrap; gap: .42rem; }
-.tag {
-  display: inline-flex; align-items: center; gap: .35rem; padding: .34rem .6rem;
-  border: 1px solid var(--line); border-radius: 999px; background: color-mix(in srgb, var(--surface-solid) 70%, transparent);
-  color: var(--muted); font-size: .75rem; font-weight: 540;
+.composer-card:focus-within { border-color: var(--accent); }
+.composer-card textarea {
+  width: 100%; resize: none; min-height: 3.2rem; max-height: 10rem; padding: .22rem;
+  font: inherit; color: var(--ink); background: transparent; border: 0; outline: none;
 }
-.tag svg { color: var(--accent); }
+.composer-card textarea::placeholder { color: var(--muted); }
+.composer-bottom { display: flex; align-items: center; gap: .5rem; }
+#draft-error { margin: 0; color: var(--muted); font-size: .8rem; }
 .send {
-  display: grid; place-items: center; width: 2.55rem; height: 2.55rem; margin-inline-start: auto;
-  border-radius: 50%; background: var(--accent-solid); color: var(--on-accent);
-  box-shadow: 0 .35rem 1rem color-mix(in srgb, var(--accent) 35%, transparent);
+  display: inline-flex; align-items: center; gap: .6rem; margin-inline-start: auto;
+  padding: .55rem 1rem; border: 0; border-radius: 999px; cursor: pointer; white-space: nowrap;
+  background: var(--accent); color: var(--surface-solid); font-weight: 620; font-size: .86rem;
 }
 .shortcuts { display: flex; flex-wrap: wrap; justify-content: center; gap: .55rem; margin-top: clamp(1.4rem, 3.4vh, 2rem); }
 .pill {
@@ -188,7 +187,6 @@ h1 {
   .top-actions .quiet[href="/guide"] { display: none; }
   main { padding-top: 2rem; }
   .composer-card { border-radius: 1.15rem; }
-  .tag { font-size: .7rem; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

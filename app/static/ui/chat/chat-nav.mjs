@@ -8,23 +8,25 @@ export function appMark(className) {
     el('img', {class: 'mark-dark', src: './assets/mark-dark.svg', alt: ''}));
 }
 
-export function sidebar({t, list, mobile, newChat, search, settings, model, archive, close}) {
+export function sidebar({t, list, mobile, conversation, newChat, search, settings, model, archive, close}) {
   const toggle = control(t('pinSidebar'), null, {glyph: 'sidebar', compact: true,
     tone: 'pin-sidebar', 'aria-expanded': 'false', 'aria-pressed': 'false'});
   const navButton = (key, glyph, click, extraClass = '') =>
     el('button', {type: 'button', class: 'control nav-control ' + extraClass,
-      'aria-label': t(key), title: t(key), onclick: click}, icon(glyph, 17), el('span', {}, t(key)),
+      'aria-label': t(key), title: t(key), 'aria-current': key === 'conversation' ? 'page' : null, onclick: click}, icon(glyph, 17), el('span', {}, t(key)),
     key === 'search' ? el('kbd', {}, 'Ctrl K') : null);
   const body = el('div', {class: 'source-list'},
     el('header', {class: 'source-head'}, appMark('brand-icon'), el('strong', {}, 'BinaryRepair'),
       mobile ? control(t('close'), close, {glyph: 'x', compact: true}) : null),
     el('div', {class: 'source-actions'},
+      navButton('conversation', 'chat', conversation),
+      navButton('archive', 'tasks', archive),
       mobile ? null : toggle,
       navButton('new', 'plus', newChat, 'new-chat'),
       navButton('search', 'search', search, 'search-button')),
     el('nav', {'aria-label': t('chats')}, el('div', {class: 'source-label'}, t('recent')), list),
     el('footer', {}, navButton('modelConfig', 'model', model),
-      navButton('archive', 'tasks', archive), navButton('settings', 'settings', settings)));
+      navButton('settings', 'settings', settings)));
   return {body, toggle};
 }
 

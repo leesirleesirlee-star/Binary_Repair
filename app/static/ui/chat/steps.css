@@ -1,4 +1,42 @@
 @layer step-design {
+  .repair-progress {
+    margin: .65rem .8rem .15rem; padding: .55rem .65rem .65rem;
+    background: color-mix(in srgb, var(--surface) 48%, transparent);
+    border: 1px solid var(--line); border-radius: 1rem;
+  }
+  .before-run .repair-progress { margin-bottom: .65rem; }
+  .repair-progress header { display: flex; gap: .4rem; justify-content: space-between; align-items: baseline; flex-wrap: wrap; }
+  .repair-progress h3 { margin: 0; font-size: .82rem; font-weight: 650; }
+  .milestone-note { font-size: .72rem; color: var(--muted); }
+  .milestone-note[data-success="true"] { color: var(--pass); }
+  .repair-progress ol { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: .65rem 0 0; padding: 0; list-style: none; }
+  .repair-progress li {
+    position: relative; display: grid; justify-items: center; align-content: start; gap: .36rem;
+    font-size: .7rem; text-align: center; color: var(--muted);
+  }
+  .repair-progress li + li::before, .repair-progress li + li::after {
+    content: ''; position: absolute; top: .35rem; inset-inline-start: -50%; width: 100%; height: 1px;
+    background: var(--line); pointer-events: none;
+  }
+  .repair-progress li + li::after { background: var(--accent); transform: scaleX(0); transform-origin: left; }
+  .repair-progress li[data-state="completed"] + li:not([data-state="pending"])::after { transform: scaleX(1); }
+  .milestone-dot {
+    z-index: 1; display: grid; place-items: center; width: .75rem; height: .75rem;
+    border: 1px solid currentColor; border-radius: 50%; background: var(--surface);
+  }
+  .milestone-dot svg { visibility: hidden; }
+  li[data-state="completed"] > .milestone-dot { color: var(--accent); background: var(--accent-soft); }
+  li[data-state="completed"] > .milestone-dot svg { visibility: visible; }
+  .repair-progress li[aria-current="step"] { font-weight: 650; color: var(--accent); }
+  .repair-progress li[aria-current="step"] .milestone-dot {
+    background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+  li[data-state="interrupted"] > .milestone-dot { background: var(--warn); }
+  @media (prefers-reduced-motion: no-preference) {
+    .repair-progress li + li::after { transition: transform .32s ease-out; }
+    .repair-progress li[aria-current="step"] .milestone-dot { animation: milestone-breathe 2.5s ease-in-out infinite alternate; }
+    @keyframes milestone-breathe { to { box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 7%, transparent); } }
+  }
   .route-overview {
     --tile-gap: .55rem;
     display: grid;
