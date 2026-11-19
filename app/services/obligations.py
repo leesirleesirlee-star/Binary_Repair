@@ -224,6 +224,13 @@ def persist_obligations(
             )
 
         with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            state = connection.execute(
+                "SELECT r.phase FROM attempts a JOIN runs r ON r.id = a.run_id "
+                "WHERE a.id = ? AND r.job_id = ?", (attempt_id, job_id),
+            ).fetchone()
+            if state is None or state["phase"] in {"finished", "cancelled", "cancelling"}:
+                return 0
             for row in rows:
                 connection.execute(
                     "INSERT INTO obligations "

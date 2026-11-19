@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import uuid
+from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +28,12 @@ from app.domain.contracts import (
 
 TERMINAL_PHASES = {"finished", "cancelled"}
 ROUTES = ("route_a", "route_b")
+
+
+class RunConflict(ValueError):
+    def __init__(self, code: str, detail: str) -> None:
+        super().__init__(detail)
+        self.code = code
 
 
 def _now() -> str:
@@ -143,6 +152,7 @@ def create_job(
     filename: str,
     defect_description: str,
     data_dir: str | Path,
+    controller_metadata: dict[str, Any] | None = None,
 ) -> JobRecord:
     if not isinstance(original_bytes, (bytes, bytearray)):
         raise TypeError("original_bytes must be bytes")
@@ -150,7 +160,7 @@ def create_job(
     job_id = uuid.uuid4().hex
     sha256 = hashlib.sha256(payload).hexdigest()
     relative_path = f"jobs/{job_id}/original.bin"
-    _write_atomic(Path(data_dir) / relative_path, payload)
+    original_path = Path(data_dir) / relative_path
 
     created_at = _now()
     connection = connect(data_dir)
@@ -176,6 +186,20 @@ def create_job(
                     created_at,
                 ),
             )
+            if controller_metadata is not None:
+                connection.execute(
+                    "INSERT INTO controller_job_metadata (job_id, payload_json) VALUES (?, ?)",
+                    (job_id, json.dumps(controller_metadata, sort_keys=True, ensure_ascii=True)),
+                )
+            _write_atomic(original_path, payload)
+    except BaseException:
+        try:
+            original_path.with_suffix(".tmp").unlink(missing_ok=True)
+            original_path.unlink(missing_ok=True)
+            original_path.parent.rmdir()
+        except OSError:
+            pass
+        raise
     finally:
         connection.close()
 
@@ -232,6 +256,7 @@ def approve_contract(
     input_sha256: str | None = None,
     manifest_sha256: str | None = None,
     scope_sha256: str | None = None,
+    connection: sqlite3.Connection | None = None,
 ) -> Approval:
     """Store the canonical reviewed contract and bind it to one job."""
 
@@ -249,49 +274,55 @@ def approve_contract(
     body_json = canonical_contract_json(contract.to_dict())
     contract_sha = contract_sha256(contract.to_dict())
 
-    connection = connect(data_dir)
-    try:
-        job = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    @contextmanager
+    def approval_connection():
+        if connection is not None:
+            if not connection.in_transaction:
+                raise ValueError("approval requires an open transaction")
+            yield connection
+            return
+        owned = connect(data_dir)
+        try:
+            with owned:
+                owned.execute("BEGIN IMMEDIATE")
+                yield owned
+        finally:
+            owned.close()
+
+    with approval_connection() as db:
+        job = db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
         if job is None:
             raise ValueError(f"unknown job id: {job_id}")
         if input_sha256 is not None and input_sha256 != job["original_sha256"]:
             raise ValueError("approved input hash does not match the stored job bytes")
 
-        with connection:
-            existing = connection.execute(
-                "SELECT * FROM contracts WHERE job_id = ? AND revision = ?",
-                (job_id, contract_revision),
-            ).fetchone()
-            if existing is not None:
-                if existing["body_json"] != body_json or existing["sha256"] != contract_sha:
-                    raise ValueError(
-                        "contract revision already exists with different approval content"
-                    )
-                contract_id = existing["id"]
-                approved_at = existing["approved_at"]
-            else:
-                contract_id = uuid.uuid4().hex
-                approved_at = _now()
-                connection.execute(
-                    "INSERT INTO contracts "
-                    "(id, job_id, revision, body_json, sha256, approved_at, reviewer_label) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        contract_id,
-                        job_id,
-                        contract_revision,
-                        body_json,
-                        contract_sha,
-                        approved_at,
-                        reviewer_label,
-                    ),
+        existing = db.execute(
+            "SELECT * FROM contracts WHERE job_id = ? AND revision = ?",
+            (job_id, contract_revision),
+        ).fetchone()
+        if existing is not None:
+            if existing["body_json"] != body_json or existing["sha256"] != contract_sha:
+                raise ValueError(
+                    "contract revision already exists with different approval content"
                 )
-                connection.execute(
-                    "UPDATE jobs SET phase = 'awaiting_review' WHERE id = ?",
-                    (job_id,),
-                )
-    finally:
-        connection.close()
+            contract_id = existing["id"]
+            approved_at = existing["approved_at"]
+        else:
+            contract_id = uuid.uuid4().hex
+            approved_at = _now()
+            db.execute(
+                "INSERT INTO contracts "
+                "(id, job_id, revision, body_json, sha256, approved_at, reviewer_label) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    contract_id, job_id, contract_revision, body_json, contract_sha,
+                    approved_at, reviewer_label,
+                ),
+            )
+            db.execute(
+                "UPDATE jobs SET phase = 'awaiting_review' WHERE id = ? AND phase = 'draft'",
+                (job_id,),
+            )
 
     return Approval(
         job_id=job_id,
@@ -363,14 +394,16 @@ def start_run(
     approval: Approval | dict[str, Any] | None,
     idempotency_key: str,
     data_dir: str | Path,
+    review_digest: str | None = None,
+    approval_for_start: Callable[[sqlite3.Connection], Approval] | None = None,
 ) -> RunRecord:
     """Start or return the run for (job, key), creating two queued attempts."""
 
-    if approval is None:
+    if approval is None and approval_for_start is None:
         raise ValueError("start_run requires an approval")
     if not idempotency_key:
         raise ValueError("idempotency_key must not be empty")
-    if _approval_field(approval, "job_id") != job_id:
+    if approval is not None and _approval_field(approval, "job_id") != job_id:
         raise ValueError("approval belongs to a different job")
 
     connection = connect(data_dir)
@@ -382,6 +415,20 @@ def start_run(
                 (job_id, idempotency_key),
             ).fetchone()
             if existing is not None:
+                if review_digest is not None:
+                    ack = connection.execute(
+                        "SELECT review_digest FROM v1_run_starts WHERE run_id = ?",
+                        (existing["id"],),
+                    ).fetchone()
+                    if ack is None or ack["review_digest"] != review_digest:
+                        raise RunConflict(
+                            "idempotency_key_conflict",
+                            "This idempotency key was used for a different start request.",
+                        )
+                    connection.commit()
+                    return _run_record(existing, created=False)
+                if approval_for_start is not None:
+                    approval = approval_for_start(connection)
                 requested_contract = _approval_field(approval, "contract_id")
                 requested_manifest = _approval_field(approval, "manifest_sha256") or "0" * 64
                 if (
@@ -400,11 +447,13 @@ def start_run(
                 (job_id,),
             ).fetchone()
             if active is not None:
-                raise ValueError("a run is already active for this job")
+                raise RunConflict("invalid_transition", "A run is already active for this job.")
 
             job = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
             if job is None:
                 raise ValueError(f"unknown job id: {job_id}")
+            if approval_for_start is not None:
+                approval = approval_for_start(connection)
             approved_input = _approval_field(approval, "input_sha256")
             if approved_input and approved_input != job["original_sha256"]:
                 raise ValueError("approval input hash does not match the stored job bytes")
@@ -429,13 +478,20 @@ def start_run(
                 "VALUES (?, ?, ?, ?, ?, ?, 'queued', ?)",
                 (run_id, job_id, contract_id, manifest, reviewed_scope, idempotency_key, started_at),
             )
+            if review_digest is not None:
+                connection.execute(
+                    "INSERT INTO v1_run_starts (run_id, review_digest) VALUES (?, ?)",
+                    (run_id, review_digest),
+                )
             for route in ROUTES:
                 connection.execute(
                     "INSERT INTO attempts (id, run_id, route, sequence, phase, outcome) "
                     "VALUES (?, ?, ?, 1, 'queued', NULL)",
                     (uuid.uuid4().hex, run_id, route),
                 )
-            connection.execute("UPDATE jobs SET phase = 'queued' WHERE id = ?", (job_id,))
+            connection.execute(
+                "UPDATE jobs SET phase = 'queued', cancel_requested = 0 WHERE id = ?", (job_id,)
+            )
             connection.commit()
         except BaseException:
             connection.rollback()
@@ -474,6 +530,40 @@ def list_queued_runs(*, data_dir: str | Path) -> list[RunRecord]:
     finally:
         connection.close()
     return [_run_record(row, created=False) for row in rows]
+
+
+def record_executor_unavailable(run: RunRecord, *, data_dir: str | Path) -> None:
+    """Record a worker preflight only while the named run is still unclaimed."""
+    connection = connect(data_dir)
+    try:
+        with connection:
+            connection.execute(
+                "INSERT INTO run_executor_preflight (run_id, observed_at) "
+                "SELECT id, ? FROM runs WHERE id = ? AND job_id = ? AND phase = 'queued' "
+                "ON CONFLICT(run_id) DO UPDATE SET observed_at = excluded.observed_at",
+                (_now(), run.id, run.job_id),
+            )
+    finally:
+        connection.close()
+
+
+def claim_run(run: RunRecord, *, data_dir: str | Path) -> bool:
+    """Claim a queued run before work begins, in the same store used for cancellation."""
+    connection = connect(data_dir)
+    try:
+        with connection:
+            updated = connection.execute(
+                "UPDATE runs SET phase = 'screening' WHERE id = ? AND job_id = ? AND phase = 'queued' "
+                "AND EXISTS (SELECT 1 FROM jobs WHERE jobs.id = runs.job_id AND cancel_requested = 0)",
+                (run.id, run.job_id),
+            )
+            if updated.rowcount != 1:
+                return False
+            connection.execute("DELETE FROM run_executor_preflight WHERE run_id = ?", (run.id,))
+            connection.execute("UPDATE jobs SET phase = 'screening' WHERE id = ?", (run.job_id,))
+            return True
+    finally:
+        connection.close()
 
 
 def latest_run(job_id: str, *, data_dir: str | Path) -> RunRecord | None:
@@ -731,8 +821,8 @@ def retry_attempt(run_id: str, route: str, *, data_dir: str | Path) -> AttemptRe
             run = connection.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
             if run is None:
                 raise ValueError(f"unknown run id: {run_id}")
-            if run["phase"] in TERMINAL_PHASES:
-                raise ValueError("run is terminal; cannot append an attempt")
+            if run["phase"] in TERMINAL_PHASES | {"cancelling"}:
+                raise ValueError("run no longer accepts attempts")
             row = connection.execute(
                 "SELECT MAX(sequence) AS seq FROM attempts WHERE run_id = ? AND route = ?",
                 (run_id, route),
@@ -756,13 +846,49 @@ def retry_attempt(run_id: str, route: str, *, data_dir: str | Path) -> AttemptRe
     return attempt
 
 
-def cancel_job(job_id: str, *, data_dir: str | Path) -> JobRecord:
-    """Cancel the current nonterminal run, never a finished one.
+def _request_cancellation(connection, job_id: str, run):
+    phase = run["phase"]
+    if phase in {"cancelling", "cancelled"}:
+        return run
+    if phase == "finished":
+        raise RunConflict("invalid_transition", "A completed or failed run cannot be cancelled.")
+    # Only a run that no worker has claimed can be confirmed as never executed.
+    target = "cancelled" if phase == "queued" else "cancelling"
+    finished_at = _now() if target == "cancelled" else None
+    connection.execute(
+        "UPDATE runs SET phase = ?, finished_at = ? WHERE id = ?",
+        (target, finished_at, run["id"]),
+    )
+    connection.execute(
+        "UPDATE jobs SET phase = ?, cancel_requested = 1 WHERE id = ?", (target, job_id),
+    )
+    return connection.execute("SELECT * FROM runs WHERE id = ?", (run["id"],)).fetchone()
 
-    The active-run guard is atomic with the update, so a concurrent worker
-    completion either commits first (and this call refuses) or the cancel
-    commits first (and a later completion cannot overwrite ``cancelled``).
-    """
+
+def cancel_run(job_id: str, run_id: str, *, data_dir: str | Path):
+    """Resolve the named run and cancel it only if it is still current."""
+    connection = connect(data_dir)
+    try:
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            named = connection.execute(
+                "SELECT * FROM runs WHERE job_id = ? AND id = ?", (job_id, run_id),
+            ).fetchone()
+            if named is None:
+                return None
+            latest = connection.execute(
+                "SELECT id FROM runs WHERE job_id = ? ORDER BY started_at DESC, rowid DESC LIMIT 1",
+                (job_id,),
+            ).fetchone()
+            if latest["id"] != run_id:
+                raise RunConflict("invalid_transition", "That run is not the current run for this job.")
+            return _request_cancellation(connection, job_id, named)
+    finally:
+        connection.close()
+
+
+def cancel_job(job_id: str, *, data_dir: str | Path) -> JobRecord:
+    """Legacy job-scoped cancellation of the current run or draft."""
     connection = connect(data_dir)
     try:
         connection.execute("BEGIN IMMEDIATE")
@@ -771,23 +897,20 @@ def cancel_job(job_id: str, *, data_dir: str | Path) -> JobRecord:
             if row is None:
                 raise ValueError(f"unknown job id: {job_id}")
             active = connection.execute(
-                "SELECT id, phase FROM runs WHERE job_id = ? "
+                "SELECT * FROM runs WHERE job_id = ? "
                 "AND phase NOT IN ('finished', 'cancelled') "
                 "ORDER BY started_at DESC, rowid DESC LIMIT 1",
                 (job_id,),
             ).fetchone()
             if active is not None:
-                connection.execute(
-                    "UPDATE runs SET phase = 'cancelled', finished_at = ? "
-                    "WHERE id = ? AND phase NOT IN ('finished', 'cancelled')",
-                    (_now(), active["id"]),
-                )
+                _request_cancellation(connection, job_id, active)
             elif row["phase"] not in {"draft", "queued", "awaiting_review", "cancelled"}:
                 raise ValueError("no active run to cancel")
-            connection.execute(
-                "UPDATE jobs SET phase = 'cancelled', cancel_requested = 1 WHERE id = ?",
-                (job_id,),
-            )
+            else:
+                connection.execute(
+                    "UPDATE jobs SET phase = 'cancelled', cancel_requested = 1 WHERE id = ?",
+                    (job_id,),
+                )
             connection.commit()
         except BaseException:
             connection.rollback()
@@ -798,6 +921,120 @@ def cancel_job(job_id: str, *, data_dir: str | Path) -> JobRecord:
     if record is None:
         raise ValueError(f"unknown job id: {job_id}")
     return record
+
+
+_PLACEHOLDER_CONTRACT_SHA: str | None = None
+
+
+def placeholder_contract_sha() -> str:
+    """SHA-256 of the legacy identity placeholder used by hash-only approvals."""
+    global _PLACEHOLDER_CONTRACT_SHA
+    if _PLACEHOLDER_CONTRACT_SHA is None:
+        _PLACEHOLDER_CONTRACT_SHA = contract_sha256(_legacy_contract())
+    return _PLACEHOLDER_CONTRACT_SHA
+
+
+def reviewed_scope_state(job_id: str, run_id: str, *, data_dir: str | Path) -> tuple[bool, str]:
+    """Fail-closed check: may any executor run under this run's recorded scope?
+
+    A run is executable only when its persisted contract is a canonical
+    ``SecurityContract`` whose hash is the run scope, the scope is not the
+    legacy identity placeholder, and a managed v1 job additionally carries the
+    approval markers written by the reviewed-approval transaction.
+    """
+    connection = connect(data_dir)
+    try:
+        run = connection.execute(
+            "SELECT * FROM runs WHERE id = ? AND job_id = ?", (run_id, job_id),
+        ).fetchone()
+        if run is None:
+            return False, "run not found for this job"
+        contract = connection.execute(
+            "SELECT * FROM contracts WHERE id = ? AND job_id = ?",
+            (run["contract_id"], job_id),
+        ).fetchone()
+        meta_row = connection.execute(
+            "SELECT payload_json FROM controller_job_metadata WHERE job_id = ?", (job_id,),
+        ).fetchone()
+        start_ack = connection.execute(
+            "SELECT review_digest FROM v1_run_starts WHERE run_id = ?", (run_id,),
+        ).fetchone()
+    finally:
+        connection.close()
+    if contract is None:
+        return False, "run has no approved contract"
+    if not contract["approved_at"]:
+        return False, "the run contract has no recorded approval"
+    try:
+        body = json.loads(contract["body_json"])
+        canonical = SecurityContract.from_dict(body) if isinstance(body, dict) else None
+    except (TypeError, ValueError):
+        canonical = None
+    if canonical is None:
+        return False, "the run contract is not a canonical security contract"
+    sha = canonical.sha256()
+    if (
+        hashlib.sha256(contract["body_json"].encode("utf-8")).hexdigest() != sha
+        or sha != str(contract["sha256"])
+    ):
+        return False, "the run contract bytes do not match the stored contract hash"
+    if sha != str(run["reviewed_scope_sha256"] or ""):
+        return False, "the run contract hash does not match the run scope"
+    if sha == placeholder_contract_sha():
+        return False, "the run scope is the legacy identity placeholder"
+    meta: dict[str, Any] = {}
+    if meta_row is not None:
+        try:
+            loaded = json.loads(meta_row["payload_json"])
+        except (TypeError, ValueError):
+            return False, "the job approval metadata cannot be read"
+        if not isinstance(loaded, dict):
+            return False, "the job approval metadata cannot be read"
+        meta = loaded
+    if meta.get("review_v1") or start_ack is not None:
+        approval = meta.get("approval")
+        if not isinstance(approval, dict):
+            return False, "the managed approval is missing"
+        if (
+            approval.get("canonical_contract_sha256") != sha
+            or approval.get("revision") != contract["revision"]
+            or meta.get("manifest_sha256") != run["manifest_sha256"]
+        ):
+            return False, "the managed approval is not bound to the run contract"
+        typed_sha = approval.get("typed_contract_sha256")
+        if not isinstance(typed_sha, str) or typed_sha != meta.get("typed_contract_sha256"):
+            return False, "the managed approval has no typed contract source"
+        if start_ack is not None and approval.get("review_binding_digest") != start_ack["review_digest"]:
+            return False, "the managed approval differs from the recorded start"
+    return True, ""
+
+
+def fail_unbound_run(job_id: str, run_id: str, *, detail: str, data_dir: str | Path) -> None:
+    """Terminate a run that cannot execute, without invoking an executor or a verdict."""
+    reason = "unbound_review_scope"
+    connection = connect(data_dir)
+    try:
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            state = connection.execute(
+                "SELECT phase FROM runs WHERE id = ? AND job_id = ?", (run_id, job_id),
+            ).fetchone()
+            if state is None or state["phase"] in TERMINAL_PHASES | {"cancelling"}:
+                return
+            finished = _now()
+            connection.execute(
+                "UPDATE runs SET phase = 'finished', outcome = 'error', reason = ?, "
+                "failing_obligation = NULL, detail = ?, finished_at = ? WHERE id = ?",
+                (reason, detail, finished, run_id),
+            )
+            connection.execute(
+                "UPDATE attempts SET phase = 'finished', outcome = 'error', reason = ?, detail = ? "
+                "WHERE run_id = ? AND phase NOT IN ('finished', 'cancelled')",
+                (reason, detail, run_id),
+            )
+            connection.execute("UPDATE jobs SET phase = 'finished' WHERE id = ?", (job_id,))
+    finally:
+        connection.close()
 
 
 __all__ = [
@@ -811,6 +1048,7 @@ __all__ = [
     "cancel_job",
     "contract_body",
     "create_job",
+    "fail_unbound_run",
     "get_artifact",
     "get_attempt",
     "get_contract",
@@ -821,6 +1059,8 @@ __all__ = [
     "list_attempts",
     "list_obligations",
     "list_queued_runs",
+    "placeholder_contract_sha",
     "retry_attempt",
+    "reviewed_scope_state",
     "start_run",
 ]

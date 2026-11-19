@@ -1,0 +1,4 @@
+CREATE TABLE IF NOT EXISTS v1_run_starts (
+    run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+    review_digest TEXT NOT NULL
+);

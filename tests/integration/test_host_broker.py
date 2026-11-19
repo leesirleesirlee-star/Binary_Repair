@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from app.services import jobs
+from tests.support_typed_contract import sample_typed_contract
 from tools.host_broker import process_once
 from tools.host_importer import import_bundle
 
@@ -25,6 +28,7 @@ def _started(tmp_path: Path):
         data_dir=data_dir,
         input_sha256=record.original_sha256,
         manifest_sha256="1" * 64,
+        contract_body=sample_typed_contract(),
     )
     run = jobs.start_run(
         record.id,
@@ -123,3 +127,52 @@ def test_broker_rejects_bundle_path_escape(tmp_path: Path) -> None:
     summary = process_once(data_dir=data_dir, inbox=inbox, trigger=False)
     assert summary["imported"] == 0
     assert summary["failed"] == 1
+
+
+@pytest.mark.parametrize("mismatch", ["job_id", "run_id", "original_sha256", "candidate_sha256", "registered_bytes"])
+def test_broker_rejects_wrong_binding_or_digest_without_publishing(tmp_path: Path, mismatch: str) -> None:
+    data_dir, record, run = _started(tmp_path)
+    attempt = jobs.list_attempts(run.id, data_dir=data_dir)[0]
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    bundle = _bundle(record, attempt)
+    envelope = {
+        "job_id": record.id, "run_id": run.id, "attempt_id": attempt.id,
+        "route": attempt.route, "bundle": bundle,
+    }
+    if mismatch in {"job_id", "run_id"}:
+        other = jobs.create_job(
+            original_bytes=b"another inert fixture", filename="other.bin",
+            defect_description="Another synthetic task.", data_dir=data_dir,
+        )
+        approval = jobs.approve_contract(
+            other.id, contract_revision=1, reviewer_label="synthetic", data_dir=data_dir,
+            input_sha256=other.original_sha256, manifest_sha256="1" * 64,
+        )
+        other_run = jobs.start_run(other.id, approval=approval, idempotency_key="other", data_dir=data_dir)
+        envelope[mismatch] = other.id if mismatch == "job_id" else other_run.id
+    elif mismatch == "original_sha256":
+        bundle[mismatch] = "0" * 64
+    else:
+        relative = f"jobs/{record.id}/synthetic-candidate"
+        candidate = data_dir / relative
+        candidate.write_bytes(b"inert evidence bytes")
+        artifact = jobs.add_artifact(
+            record.id, relative_path=relative, role="v0_evidence",
+            attempt_id=attempt.id, data_dir=data_dir,
+        )
+        bundle["results"]["V0"] = "passed"
+        bundle["evidence"] = {"V0": artifact["id"]}
+        bundle["candidate_sha256"] = "f" * 64 if mismatch == "candidate_sha256" else artifact["sha256"]
+        if mismatch == "registered_bytes":
+            candidate.write_bytes(b"changed inert evidence bytes")
+
+    before = jobs.list_artifacts(record.id, data_dir=data_dir)
+    (inbox / "mismatch.json").write_text(json.dumps(envelope), encoding="utf-8")
+    assert process_once(data_dir=data_dir, inbox=inbox, trigger=False) == {
+        "imported": 0, "failed": 1, "worker_processed": 0,
+    }
+    assert (inbox / "failed" / "mismatch.json").is_file()
+    assert not (data_dir / "jobs" / record.id / "runs" / run.id / "attempts" / f"{attempt.id}.json").exists()
+    assert jobs.list_artifacts(record.id, data_dir=data_dir) == before
+    assert jobs.get_attempt(attempt.id, data_dir=data_dir).outcome is None

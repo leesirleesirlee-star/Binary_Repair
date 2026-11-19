@@ -79,7 +79,9 @@ def _stamp_attempt(
     try:
         with connection:
             connection.execute(
-                f"UPDATE attempts SET {', '.join(assignments)} WHERE id = ?", values
+                f"UPDATE attempts SET {', '.join(assignments)} WHERE id = ? "
+                "AND EXISTS (SELECT 1 FROM runs WHERE runs.id = attempts.run_id "
+                "AND runs.phase NOT IN ('finished', 'cancelled', 'cancelling'))", values,
             )
     finally:
         connection.close()
@@ -103,8 +105,14 @@ def _set_phase(table: str, row_id: str, phase: str, *, data_dir: str | Path) -> 
     connection = connect(data_dir)
     try:
         with connection:
+            owner_guard = (
+                " AND EXISTS (SELECT 1 FROM runs WHERE runs.id = attempts.run_id "
+                "AND runs.phase NOT IN ('finished', 'cancelled', 'cancelling'))"
+                if table == "attempts" else ""
+            )
             connection.execute(
-                f"UPDATE {table} SET phase = ? WHERE id = ?",
+                f"UPDATE {table} SET phase = ? WHERE id = ? "
+                "AND phase NOT IN ('finished', 'cancelled', 'cancelling')" + owner_guard,
                 (phase, row_id),
             )
     finally:
@@ -229,6 +237,38 @@ def _executor_argv(command: str) -> list[str]:
     return argv
 
 
+_PROBE_CACHE: dict[str, tuple[float, bool]] = {}
+
+
+def _probe_executor(command: str, *, ttl: float = 10.0) -> bool:
+    """Return True when the configured executor reports readiness.
+
+    The probe is a cheap, side-effect-free check (the guest bridge implements it
+    as ``--probe``). A false result records a worker observation and leaves the
+    run queued, so an unavailable guest produces ``waiting_for_executor``
+    instead of a fabricated execution or a premature tool failure.
+    """
+
+    now = time.monotonic()
+    cached = _PROBE_CACHE.get(command)
+    if cached is not None and now - cached[0] < ttl:
+        return cached[1]
+    try:
+        completed = subprocess.run(
+            _executor_argv(command),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        ready = False
+    else:
+        ready = completed.returncode == 0
+    _PROBE_CACHE[command] = (now, ready)
+    return ready
+
+
 def _run_executor(
     *,
     data_dir: str | Path,
@@ -319,6 +359,10 @@ def _attempt_verdict(
     if not bundle.exists():
         return None
 
+    current = jobs.get_run(run.id, data_dir=data_dir)
+    if current is None or current.phase in TERMINAL | {"cancelling"}:
+        return None
+
     payload = _load_bundle(bundle)
     if payload.get("route") not in (None, attempt.route):
         raise ValueError(f"result bundle route does not match attempt {attempt.id}")
@@ -379,16 +423,38 @@ def run_once(*, data_dir: str | Path) -> int:
         if job is None:
             print(f"worker: run {run.id} has no job")
             continue
-        if job.cancel_requested:
-            jobs.cancel_job(job.id, data_dir=data_dir)
-            print(f"worker: job {job.id} cancelled")
+        scope_ok, scope_detail = jobs.reviewed_scope_state(
+            run.job_id, run.id, data_dir=data_dir,
+        )
+        if not scope_ok:
+            jobs.fail_unbound_run(
+                run.job_id, run.id, detail=scope_detail, data_dir=data_dir,
+            )
+            print(f"worker: run {run.id} refused before the executor: {scope_detail}")
             continue
-
-        _set_phase("runs", run.id, "screening", data_dir=data_dir)
-        _set_phase("jobs", job.id, "screening", data_dir=data_dir)
+        pending = [
+            attempt for attempt in jobs.list_attempts(run.id, data_dir=data_dir)
+            if attempt.phase not in TERMINAL
+        ]
+        waiting_for_evidence = bool(pending) and not any(
+            _bundle_path(data_dir, job.id, run.id, attempt.id).is_file() for attempt in pending
+        )
+        attempt_command = os.environ.get("BINARYREPAIR_ATTEMPT_CMD")
+        probe_command = os.environ.get("BINARYREPAIR_EXECUTOR_PROBE_CMD")
+        if waiting_for_evidence and not attempt_command:
+            jobs.record_executor_unavailable(run, data_dir=data_dir)
+            continue
+        if waiting_for_evidence and probe_command and not _probe_executor(probe_command):
+            jobs.record_executor_unavailable(run, data_dir=data_dir)
+            continue
+        if not jobs.claim_run(run, data_dir=data_dir):
+            continue
 
         verdicts: dict[str, Verdict] = {}
         for attempt in jobs.list_attempts(run.id, data_dir=data_dir):
+            current = jobs.get_run(run.id, data_dir=data_dir)
+            if current is None or current.phase in TERMINAL | {"cancelling"}:
+                break
             if attempt.phase in TERMINAL and attempt.outcome:
                 verdict = _reconstruct(attempt)
                 if verdict is not None:
@@ -409,6 +475,9 @@ def run_once(*, data_dir: str | Path) -> int:
                     data_dir=data_dir,
                 )
             except Exception as exc:  # noqa: BLE001 - worker must persist a failure
+                current = jobs.get_run(run.id, data_dir=data_dir)
+                if current is None or current.phase in TERMINAL | {"cancelling"}:
+                    break
                 try:
                     verdict = orchestration.evaluate_attempt(
                         job.id,
@@ -426,7 +495,9 @@ def run_once(*, data_dir: str | Path) -> int:
                         with connection:
                             connection.execute(
                                 "UPDATE attempts SET phase = 'finished', outcome = 'error', "
-                                "reason = 'tool_failed', detail = ? WHERE id = ?",
+                                "reason = 'tool_failed', detail = ? WHERE id = ? "
+                                "AND EXISTS (SELECT 1 FROM runs WHERE runs.id = attempts.run_id "
+                                "AND runs.phase NOT IN ('finished', 'cancelled', 'cancelling'))",
                                 (f"{exc}; fallback: {inner}", attempt.id),
                             )
                     finally:

@@ -1,5 +1,5 @@
-import {artifactUrl, currentEvaluation, reportUrl, shouldPoll} from './api.mjs';
-import {badge, button, date, el, isAscii, notice} from '../shared/dom.mjs';
+import {currentEvaluation, reportUrl, shouldPoll} from './api.mjs';
+import {badge, button, date, download, el, isAscii, notice} from '../shared/dom.mjs';
 import {icon} from '../shared/icons.mjs';
 
 export const fieldKeys = ['valid_domain', 'forbidden', 'invalid_outcome', 'assumptions'];
@@ -15,12 +15,23 @@ const shortHash = value => typeof value === 'string' && value.length > 16 ? valu
 
 const statusOf = job => job.execution?.status || job.phase;
 
+const fieldCanonicalName = {
+  valid_domain: 'valid_domain',
+  forbidden: 'forbidden_behavior',
+  invalid_outcome: 'invalid_input_response',
+  assumptions: 'environment_assumptions',
+};
+
+function bindingComplete(binding) {
+  if (!binding.original_sha256 || !binding.test_manifest_sha256 || !binding.environment ||
+      !binding.patch_policy || !binding.verification_scope) return false;
+  if (binding.requires_typed_contract && !binding.canonical_contract_sha256) return false;
+  return true;
+}
+
 function statusReason(t, contract, dirty) {
   if (dirty) return t('saveFirst');
-  if (!contract.review_binding_digest || !contract.review_binding?.original_sha256 ||
-      !contract.review_binding?.test_manifest_sha256 ||
-      !contract.review_binding?.environment || !contract.review_binding?.patch_policy ||
-      !contract.review_binding?.verification_scope) return t('bindingMissing');
+  if (!contract.review_binding_digest || !bindingComplete(contract.review_binding || {})) return t('bindingMissing');
   if (!contract.approved) return t('approvalRequired');
   return '';
 }
@@ -39,22 +50,24 @@ function contractView(ctx) {
   const dirty = fieldKeys.some(key => (edits[key] ?? textOf(contract[key])) !== textOf(contract[key]));
   const active = Boolean(job.execution?.run_id) && job.execution?.terminal !== true;
   const writable = api.writable && api.lifecycle !== false && !active;
-  const complete = Boolean(binding.original_sha256 && binding.test_manifest_sha256 && binding.environment &&
-    binding.patch_policy && binding.verification_scope);
+  const complete = bindingComplete(binding);
   const cancelled = job.phase === 'cancelled';
   const reason = cancelled ? t('cancelledJob') : statusReason(t, contract, dirty);
   const validate = value => isAscii(value) ? '' : t('ascii');
   const valueOf = key => edits[key] ?? (Array.isArray(contract[key]) ? contract[key].join('\n') : contract[key] ?? '');
 
-  const fields = el('div', {class: 'columns'}, fieldKeys.map(key => label(t(key), el('textarea', {
-    name: key, rows: key === 'assumptions' ? 3 : 2, value: valueOf(key), readonly: !writable,
-    oninput: event => {
-      const input = event.currentTarget;
-      edits[key] = input.value;
-      input.setCustomValidity(validate(input.value));
-      ctx.syncContract?.(true);
-    },
-  }))));
+  const fields = el('div', {class: 'columns'}, fieldKeys.map(key => label(
+    t(key) + ' · ' + fieldCanonicalName[key],
+    el('textarea', {
+      name: key, rows: key === 'assumptions' ? 3 : 2, value: valueOf(key), readonly: !writable,
+      oninput: event => {
+        const input = event.currentTarget;
+        edits[key] = input.value;
+        input.setCustomValidity(validate(input.value));
+        ctx.syncContract?.(true);
+      },
+    }),
+  )));
 
   const save = button(t('save'), null, {type: 'submit', disabled: busy || !writable});
   const planButton = button(t('plan'), () => act(() => api.plan(job.id), {plan: true}), {className: 'subtle', disabled: busy});
@@ -85,6 +98,7 @@ function contractView(ctx) {
     ['environment', binding.environment],
     ['patchPolicy', binding.patch_policy],
     ['verificationScope', binding.verification_scope],
+    ['canonicalContract', binding.canonical_contract_sha256],
   ];
 
   return section(t('contract'),
@@ -178,16 +192,21 @@ function resultView({t, language, job, data, reload, refresh}) {
       el('p', {class: 'wrap'}, el('code', {class: 'mono'}, row.code), ' — ', row.detail))) : null);
 }
 
-function artifactRow(artifact, t, api) {
+function artifactRow(artifact, {t, job, api, act, busy}) {
   const id = artifact.id;
-  const downloadable = artifact.available && typeof id === 'string' && !id.startsWith('demo-artifact-');
+  const downloadable = typeof api.downloadArtifact === 'function' &&
+    artifact.available && typeof id === 'string' && !id.startsWith('demo-artifact-');
   return el('div', {class: 'item'}, el('div', {class: 'stack wrap'},
     el('strong', {}, artifact.name || id),
     el('span', {class: 'stat'}, [t(artifact.kind), artifact.role].filter(Boolean).join(' · ') +
       (artifact.size_bytes ? ' · ' + artifact.size_bytes + ' B' : '')),
     artifact.sha256 ? el('code', {class: 'mono'}, artifact.sha256) : null,
     !artifact.available && artifact.unavailable_reason ? el('span', {class: 'stat'}, artifact.unavailable_reason) : null),
-    downloadable ? el('a', {class: 'button subtle', href: artifactUrl(id), download: true},
+    downloadable ? el('button', {class: 'button subtle', type: 'button', disabled: busy,
+      onclick: () => act(async () => {
+        const {file, filename} = await api.downloadArtifact(job.id, id);
+        download(file, filename);
+      })},
       icon('download', 16), t('download')) : null);
 }
 
@@ -198,7 +217,7 @@ function evidenceView({t, job, data, api, act, busy}) {
   return section(t('evidence'),
     el('div', {class: 'subsection'},
       el('h3', {}, t('artifacts') + (artifacts.length ? ' · ' + artifacts.length : '')),
-      artifacts.length ? artifacts.map(artifact => artifactRow(artifact, t, api)) : notice(t('noArtifacts'))),
+      artifacts.length ? artifacts.map(artifact => artifactRow(artifact, {t, job, api, act, busy})) : notice(t('noArtifacts'))),
     el('div', {class: 'subsection'},
       el('h3', {}, t('comparison')),
       comparison?.status === 'available' ?

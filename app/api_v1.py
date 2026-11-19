@@ -19,13 +19,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import secrets
 from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
+from starlette.concurrency import run_in_threadpool
 
-from app.backend import BackendError
+from app.backend import BackendError, HttpBackend
 
 CONTRACT_VERSION = "1"
 VERSION_HEADER = "X-BinaryRepair-Contract-Version"
@@ -34,6 +36,7 @@ MAX_FILE_BYTES = 20 * 1024 * 1024
 MAX_REQUEST_BYTES = 24 * 1024 * 1024
 MAX_FIELD_BYTES = 16 * 1024
 MAX_REVIEWER = 128
+MAX_COMPARISON_BYTES = 2 * 1024 * 1024
 
 PATCH_POLICY = {
     "id": "reviewed-contract-scope",
@@ -114,7 +117,11 @@ def _canonical(value: Any) -> str:
 
 def _as_snapshot(job_id: str) -> dict[str, Any]:
     try:
-        snapshot = _backend().get_snapshot(job_id)
+        backend = _backend()
+        snapshot = (
+            backend.get_review_snapshot(job_id)
+            if isinstance(backend, HttpBackend) else backend.get_snapshot(job_id)
+        )
     except BackendError as exc:
         raise ApiError(
             _code_status(exc.status_code), _code_for(exc.status_code), exc.detail
@@ -151,6 +158,10 @@ def _assumptions(value: Any) -> list[str]:
     return [line.strip() for line in str(value or "").splitlines() if line.strip()]
 
 
+def _digest_or_none(value: Any) -> str | None:
+    return value if isinstance(value, str) and len(value) == 64 else None
+
+
 def _binding(snapshot: dict[str, Any]) -> dict[str, Any]:
     environment_text = str(snapshot.get("environment") or "").strip()
     environment = (
@@ -164,12 +175,24 @@ def _binding(snapshot: dict[str, Any]) -> dict[str, Any]:
     )
     manifest = snapshot.get("manifest_sha256")
     original = snapshot.get("original_sha256")
+    patch_policy = snapshot.get("patch_policy")
+    verification_scope = snapshot.get("verification_scope")
     return {
-        "original_sha256": original if isinstance(original, str) and len(original) == 64 else None,
-        "test_manifest_sha256": manifest if isinstance(manifest, str) and len(manifest) == 64 else None,
+        "original_sha256": _digest_or_none(original),
+        "test_manifest_sha256": _digest_or_none(manifest),
         "environment": environment,
-        "patch_policy": dict(PATCH_POLICY),
-        "verification_scope": dict(VERIFICATION_SCOPE),
+        "patch_policy": (
+            dict(patch_policy) if isinstance(patch_policy, dict) else dict(PATCH_POLICY)
+        ),
+        "verification_scope": (
+            dict(verification_scope) if isinstance(verification_scope, dict)
+            else dict(VERIFICATION_SCOPE)
+        ),
+        "typed_contract_sha256": _digest_or_none(snapshot.get("typed_contract_sha256")),
+        "canonical_contract_sha256": _digest_or_none(snapshot.get("canonical_contract_sha256")),
+        # Only the durable controller can bind execution, so only it requires the
+        # typed contract. Synthetic preview snapshots stay display-only.
+        "requires_typed_contract": snapshot.get("data_source") == "controller-http",
     }
 
 
@@ -177,6 +200,8 @@ def binding_digest(binding: dict[str, Any], contract: dict[str, Any]) -> str:
     payload = {
         "contract_revision": contract.get("revision"),
         "contract_sha256": contract.get("sha256"),
+        "typed_contract_sha256": binding.get("typed_contract_sha256"),
+        "canonical_contract_sha256": binding.get("canonical_contract_sha256"),
         "original_sha256": binding.get("original_sha256"),
         "test_manifest_sha256": binding.get("test_manifest_sha256"),
         "environment": binding.get("environment"),
@@ -187,6 +212,8 @@ def binding_digest(binding: dict[str, Any], contract: dict[str, Any]) -> str:
 
 
 def binding_complete(binding: dict[str, Any]) -> bool:
+    if binding.get("requires_typed_contract") and binding.get("canonical_contract_sha256") is None:
+        return False
     return all(
         binding.get(key) is not None
         for key in (
@@ -220,6 +247,14 @@ def _contract_view(snapshot: dict[str, Any]) -> dict[str, Any]:
     binding = _binding(snapshot)
     contract["review_binding"] = binding
     contract["review_binding_digest"] = binding_digest(binding, contract)
+    if "approved_review_digest" in snapshot:
+        contract["approved"] = (
+            contract["approved"]
+            and snapshot["approved_review_digest"] == contract["review_binding_digest"]
+        )
+        if not contract["approved"]:
+            contract["approved_at"] = None
+            contract["reviewer_label"] = None
     return contract
 
 
@@ -482,63 +517,76 @@ def comparison_payload(job_id: str, run_id: str | None = None) -> dict[str, Any]
     selected = execution.get("run_id") if run_id is None else run_id
     if run_id is not None and run_id != execution.get("run_id"):
         _historical_evaluation(job_id, run_id)
-    try:
-        raw = _backend().get_comparison(job_id)
-    except BackendError as exc:
-        raise ApiError(_code_status(exc.status_code), _code_for(exc.status_code), exc.detail) from exc
-    if raw is None:
-        return {
-            "job_id": job_id,
-            "run_id": selected,
-            "status": "not_provided",
-            "detail": "No behavior comparison is registered for this run.",
-            "comparison": None,
-            "artifacts": [],
-        }
-    status = str(raw.get("status") or "not_provided")
-    if status not in {"available", "not_provided", "invalid"}:
-        status = "invalid"
-    detail = str(raw.get("detail") or "")
-    summary = None
-    if status == "available":
-        summary = detail or "Comparison evidence is registered for this run."
-    return {
+    rows = _evidence_rows(job_id, selected) if selected is not None else []
+    return _comparison_for_run(job_id, selected, rows)
+
+
+def _comparison_for_run(
+    job_id: str, run_id: str | None, rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    from app.main import _comparison_validate
+
+    result: dict[str, Any] = {
         "job_id": job_id,
-        "run_id": selected,
-        "status": status,
-        "detail": detail,
-        "comparison": {"summary": summary} if summary else None,
+        "run_id": run_id,
+        "status": "not_provided",
+        "detail": "No behavior comparison is registered for this run.",
+        "comparison": None,
         "artifacts": [],
-        "details": raw,
     }
+    row = next((row for row in rows if row.get("role") == "behavior_comparison"), None)
+    if row is None:
+        return result
+    artifact = artifact_view(row, job_id, 0)
+    result.update(
+        status="invalid", detail="The registered comparison evidence is invalid or unavailable.",
+        artifacts=[artifact],
+    )
+    getter = getattr(_backend(), "get_artifact_bytes", None)
+    if not artifact["available"] or getter is None or artifact["size_bytes"] > MAX_COMPARISON_BYTES:
+        return result
+    try:
+        content, _, _ = getter(artifact["id"])
+    except (BackendError, OSError):
+        artifact.update(available=False, unavailable_reason="comparison_bytes_unavailable")
+        return result
+    if len(content) > MAX_COMPARISON_BYTES:
+        return result
+    if hashlib.sha256(content).hexdigest() != artifact["sha256"]:
+        artifact.update(available=False, unavailable_reason="hash_mismatch")
+        return result
+    try:
+        validated = _comparison_validate(job_id, json.loads(content.decode("utf-8")))
+    except (TypeError, ValueError):
+        return result
+    if validated["status"] != "available":
+        return result
+    counts = validated["comparison"]["summary"]
+    summary = (
+        f'{counts["total"]} recorded behavior checks: {counts["same"]} same, '
+        f'{counts["different"]} different, {counts["not_run"]} not run.'
+    )
+    result.update(status="available", detail="", comparison={"summary": summary})
+    return result
 
 
 def _artifact_kind(row: dict[str, Any]) -> str:
     role = str(row.get("role") or "")
     if role in {"original", "original_input"}:
         return "original_input"
-    if role == "operator_deliverable":
+    if role in {"operator_deliverable", "manual_deliverable"}:
         return "manual_deliverable"
-    kind = row.get("kind")
-    if kind in {"original_input", "manual_deliverable", "run_evidence"}:
-        return str(kind)
     return "run_evidence"
 
 
-def _artifact_view(row: dict[str, Any], job_id: str, fallback_run: str | None, index: int) -> dict[str, Any]:
+def artifact_view(row: dict[str, Any], job_id: str, index: int) -> dict[str, Any]:
     artifact_id = row.get("id") or row.get("artifact_id")
     synthetic = not isinstance(artifact_id, str) or not artifact_id
     if synthetic:
         artifact_id = f"demo-artifact-{index}"
     role = str(row.get("role") or "")
-    run_id = row.get("run_id")
-    if not run_id and row.get("attempt_id"):
-        run_id = fallback_run
     kind = _artifact_kind(row)
-    if kind == "original_input":
-        run_id = None
-    if not run_id and kind == "run_evidence":
-        run_id = fallback_run
+    run_id = row.get("run_id") if kind == "run_evidence" else None
     reason = row.get("unavailable_reason")
     if synthetic and not reason:
         reason = "Synthetic preview artifact; no bytes are stored."
@@ -560,13 +608,7 @@ def _artifact_view(row: dict[str, Any], job_id: str, fallback_run: str | None, i
     }
 
 
-artifact_view = _artifact_view
-
-
-def artifacts_payload(job_id: str, run_id: str | None = None) -> dict[str, Any]:
-    snapshot = _as_snapshot(job_id)
-    execution = _execution(snapshot)
-    target = execution.get("run_id") if run_id is None else run_id
+def _evidence_rows(job_id: str, run_id: str | None) -> list[dict[str, Any]]:
     try:
         groups = _backend().get_artifacts(job_id)
     except BackendError as exc:
@@ -578,17 +620,24 @@ def artifacts_payload(job_id: str, run_id: str | None = None) -> dict[str, Any]:
                 rows.extend(item for item in value if isinstance(item, dict))
     elif isinstance(groups, list):
         rows.extend(item for item in groups if isinstance(item, dict))
-    selected = [
-        row for row in rows
-        if _artifact_kind(row) != "run_evidence"
-        or target is None
-        or not row.get("run_id")
-        or row.get("run_id") == target
+    return [
+        row for row in rows if row.get("job_id") in (None, job_id) and (
+            _artifact_kind(row) != "run_evidence"
+            or (run_id is not None and row.get("job_id") == job_id and row.get("run_id") == run_id)
+        )
     ]
+
+
+def artifacts_payload(job_id: str, run_id: str | None = None) -> dict[str, Any]:
+    snapshot = _as_snapshot(job_id)
+    current = _execution(snapshot).get("run_id")
+    if run_id is not None and run_id != current:
+        _historical_evaluation(job_id, run_id)
+    rows = _evidence_rows(job_id, current if run_id is None else run_id)
     return {
         "artifacts": [
-            _artifact_view(row, job_id, target, index)
-            for index, row in enumerate(selected)
+            artifact_view(row, job_id, index)
+            for index, row in enumerate(rows)
         ]
     }
 
@@ -603,15 +652,17 @@ def artifact_payload(artifact_id: str) -> dict[str, Any]:
         raise ApiError(_code_status(exc.status_code), _code_for(exc.status_code), exc.detail) from exc
     if not isinstance(row, dict) or not row.get("id"):
         raise ApiError(404, "not_found", "Artifact not found.")
-    return _artifact_view(row, str(row.get("job_id") or ""), row.get("run_id"), 0)
+    return artifact_view(row, str(row.get("job_id") or ""), 0)
 
 
 def export_payload(job_id: str, run_id: str | None = None) -> dict[str, Any]:
     snapshot = _as_snapshot(job_id)
     execution = _execution(snapshot)
     selected = execution.get("run_id") if run_id is None else run_id
-    if run_id is not None and run_id != execution.get("run_id"):
-        _historical_evaluation(job_id, run_id)
+    evaluation = evaluation_payload(job_id, selected)
+    if evaluation.get("run_id") != selected:
+        raise ApiError(503, "capability_unavailable", "The selected run changed during export.")
+    rows = _evidence_rows(job_id, selected)
     demo = bool(snapshot.get("demo"))
     return {
         "schema_version": 1,
@@ -620,9 +671,9 @@ def export_payload(job_id: str, run_id: str | None = None) -> dict[str, Any]:
         "run_id": selected,
         "data_source": str(snapshot.get("data_source") or ("synthetic" if demo else "controller-http")),
         "demo": demo,
-        "evaluation": evaluation_payload(job_id, selected),
-        "comparison": comparison_payload(job_id, selected),
-        "artifacts": artifacts_payload(job_id, selected)["artifacts"],
+        "evaluation": evaluation,
+        "comparison": _comparison_for_run(job_id, selected, rows),
+        "artifacts": [artifact_view(row, job_id, index) for index, row in enumerate(rows)],
     }
 
 
@@ -652,6 +703,7 @@ async def create_job(
     forbidden: str = Form(""),
     invalid_outcome: str = Form(""),
     assumptions: str = Form(""),
+    contract: str = Form(""),
 ) -> dict[str, Any]:
     require_v1(request)
     _require_csrf(request)
@@ -665,6 +717,7 @@ async def create_job(
         ("assumptions", assumptions),
     ):
         _ascii(name, value)
+    _ascii("contract", contract)
     if not defect.strip():
         raise ApiError(422, "invalid_input", "'defect' is required.")
     payload = await binary.read(MAX_FILE_BYTES + 1)
@@ -673,8 +726,9 @@ async def create_job(
     if not payload:
         raise ApiError(422, "invalid_input", "Uploaded file is empty.")
     filename = _safe_filename(binary.filename or "sample.bin")
+    backend = _backend()
     try:
-        job_id = _backend().create_job(
+        job_id = backend.create_job(
             binary_bytes=payload,
             filename=filename,
             defect=defect.strip(),
@@ -684,6 +738,10 @@ async def create_job(
             forbidden=forbidden,
             invalid_outcome=invalid_outcome,
             assumptions=assumptions,
+            **(
+                {"review_v1": True, "contract": contract}
+                if isinstance(backend, HttpBackend) else {}
+            ),
         )
     except BackendError as exc:
         raise ApiError(_code_status(exc.status_code), _code_for(exc.status_code), exc.detail) from exc
@@ -706,14 +764,45 @@ async def _json_body(request: Request) -> dict[str, Any]:
     return body
 
 
+@router.post("/api/jobs/{job_id}/typed-contract")
+async def attach_typed_contract(request: Request, job_id: str) -> dict[str, Any]:
+    require_v1(request)
+    _require_csrf(request)
+    body = await _json_body(request)
+    contract = body.get("contract")
+    if not isinstance(contract, dict):
+        raise ApiError(422, "invalid_input", "'contract' must be a JSON object.")
+    backend = _backend()
+    if not isinstance(backend, HttpBackend):
+        raise ApiError(
+            409, "invalid_transition", "This backend cannot store a typed contract.",
+        )
+    try:
+        return await run_in_threadpool(backend.attach_typed_contract, job_id, contract)
+    except BackendError as exc:
+        raise _review_backend_error(exc) from exc
+
+
 @router.post("/api/jobs/{job_id}/contract")
 async def update_contract(request: Request, job_id: str) -> dict[str, Any]:
     require_v1(request)
     _require_csrf(request)
     body = await _json_body(request)
     expected = body.get("expected_revision")
-    if not isinstance(expected, int) or isinstance(expected, bool):
-        raise ApiError(422, "invalid_input", "'expected_revision' must be an integer.")
+    if not isinstance(expected, int) or isinstance(expected, bool) or expected < 1:
+        raise ApiError(422, "invalid_input", "'expected_revision' must be a positive integer.")
+    backend = _backend()
+    if isinstance(backend, HttpBackend):
+        patch = {}
+        for key in ("valid_domain", "forbidden", "invalid_outcome", "assumptions"):
+            if key in body:
+                if not isinstance(body[key], str):
+                    raise ApiError(422, "invalid_input", f"'{key}' must be text.")
+                patch[key] = _ascii(key, body[key])
+        try:
+            return await run_in_threadpool(backend.edit_review, job_id, expected, patch)
+        except BackendError as exc:
+            raise _review_backend_error(exc) from exc
     snapshot = _as_snapshot(job_id)
     current = _contract_view(snapshot)
     if expected != current["revision"]:
@@ -754,6 +843,13 @@ async def update_contract(request: Request, job_id: str) -> dict[str, Any]:
     }
 
 
+def _review_backend_error(exc: BackendError) -> ApiError:
+    extra = {"current": exc.current} if exc.current is not None else {}
+    return ApiError(
+        _code_status(exc.status_code), exc.code or _code_for(exc.status_code), exc.detail, **extra,
+    )
+
+
 @router.post("/api/jobs/{job_id}/approve")
 async def approve_contract(request: Request, job_id: str) -> dict[str, Any]:
     require_v1(request)
@@ -768,6 +864,12 @@ async def approve_contract(request: Request, job_id: str) -> dict[str, Any]:
     reviewer = _ascii("reviewer_label", reviewer.strip())
     if len(reviewer) > MAX_REVIEWER:
         raise ApiError(422, "invalid_input", "'reviewer_label' must be at most 128 characters.")
+    backend = _backend()
+    if isinstance(backend, HttpBackend):
+        try:
+            return await run_in_threadpool(backend.approve_review, job_id, expected, reviewer)
+        except BackendError as exc:
+            raise _review_backend_error(exc) from exc
     snapshot = _as_snapshot(job_id)
     contract = _contract_view(snapshot)
     current = {
@@ -815,8 +917,14 @@ async def start_job(request: Request, job_id: str) -> dict[str, Any]:
     if not key or len(key) > 128:
         raise ApiError(422, "invalid_input", "An Idempotency-Key header of 1-128 characters is required.")
     expected = body.get("expected_sha256")
-    if not isinstance(expected, str) or not expected:
-        raise ApiError(422, "invalid_input", "'expected_sha256' is required.")
+    if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise ApiError(422, "invalid_input", "'expected_sha256' must be a lowercase SHA-256 digest.")
+    backend = _backend()
+    if isinstance(backend, HttpBackend):
+        try:
+            return await run_in_threadpool(backend.start_reviewed, job_id, key, expected)
+        except BackendError as exc:
+            raise _review_backend_error(exc) from exc
     snapshot = _as_snapshot(job_id)
     execution = _execution(snapshot)
     contract = _contract_view(snapshot)
@@ -864,6 +972,14 @@ async def cancel_job(request: Request, job_id: str) -> dict[str, Any]:
     run_id = body.get("run_id")
     if not isinstance(run_id, str) or not run_id:
         raise ApiError(422, "invalid_input", "'run_id' is required.")
+    backend = _backend()
+    if isinstance(backend, HttpBackend):
+        try:
+            return await run_in_threadpool(backend.cancel_run, job_id, run_id)
+        except BackendError as exc:
+            raise ApiError(
+                _code_status(exc.status_code), exc.code or _code_for(exc.status_code), exc.detail,
+            ) from exc
     snapshot = _as_snapshot(job_id)
     execution = _execution(snapshot)
     if execution.get("run_id") is None:

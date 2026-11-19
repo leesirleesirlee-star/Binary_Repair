@@ -51,6 +51,7 @@ def test_ingest_registers_artifacts_and_bundle(tmp_path: Path) -> None:
 
 def test_ingest_rejects_traversal_and_missing_passed_evidence(tmp_path: Path) -> None:
     data, job, run, attempt = _job(tmp_path)
+    before = jobs.list_artifacts(job.id, data_dir=data)
     bundle = _bundle(tmp_path)
     manifest = json.loads((bundle / "bundle.json").read_text())
     manifest["gates"]["V1"] = {"status": "passed", "artifacts": ["../outside"]}
@@ -58,6 +59,8 @@ def test_ingest_rejects_traversal_and_missing_passed_evidence(tmp_path: Path) ->
     with pytest.raises(IngestError):
         ingest(data_dir=data, job_id=job.id, run_id=run.id, attempt_id=attempt.id,
                route="route_a", bundle=bundle, trigger=False)
+    assert jobs.list_artifacts(job.id, data_dir=data) == before
+    assert not list((data / "jobs" / job.id / "evidence" / attempt.id).glob("*"))
 
 
 def test_ingest_is_idempotent_for_same_bytes(tmp_path: Path) -> None:
@@ -276,6 +279,7 @@ def test_legacy_without_result_bundle_is_all_not_run(tmp_path: Path) -> None:
 
 def test_v0_candidate_must_exist(tmp_path: Path) -> None:
     data, job, run, attempt = _job(tmp_path)
+    before = jobs.list_artifacts(job.id, data_dir=data)
     bundle = _bundle(tmp_path)
     manifest = json.loads((bundle / "bundle.json").read_text())
     manifest["candidate_sha256"] = "a" * 64
@@ -285,3 +289,37 @@ def test_v0_candidate_must_exist(tmp_path: Path) -> None:
     with pytest.raises(IngestError, match="does not contain the declared candidate"):
         ingest(data_dir=data, job_id=job.id, run_id=run.id, attempt_id=attempt.id,
                route="route_a", bundle=bundle, trigger=False)
+    assert jobs.list_artifacts(job.id, data_dir=data) == before
+    assert not (data / "jobs" / job.id / "evidence" / attempt.id).exists()
+
+
+def test_conflicting_bundle_preserves_registered_artifact_bytes(tmp_path: Path) -> None:
+    data, job, run, attempt = _job(tmp_path)
+    bundle = _bundle(tmp_path)
+    options = dict(
+        data_dir=data, job_id=job.id, run_id=run.id, attempt_id=attempt.id,
+        route="route_a", bundle=bundle, trigger=False,
+    )
+    first = ingest(**options)
+    artifact = jobs.get_artifact(first["evidence"]["V1"], data_dir=data)
+    path = data / artifact["relative_path"]
+    previous = path.read_bytes()
+    originals = jobs.list_artifacts(job.id, data_dir=data)
+    (bundle / "audit.json").write_text('{"pass": false}', encoding="utf-8")
+    with pytest.raises(IngestError, match="conflicting existing artifact"):
+        ingest(**options)
+    assert path.read_bytes() == previous
+    assert jobs.list_artifacts(job.id, data_dir=data) == originals
+
+
+def test_directory_ingest_refuses_late_evidence_before_registering(tmp_path: Path) -> None:
+    data, job, run, attempt = _job(tmp_path)
+    bundle = _bundle(tmp_path)
+    assert jobs.claim_run(run, data_dir=data)
+    assert jobs.cancel_run(job.id, run.id, data_dir=data)["phase"] == "cancelling"
+    before = jobs.list_artifacts(job.id, data_dir=data)
+    with pytest.raises(IngestError, match="run no longer accepts results"):
+        ingest(data_dir=data, job_id=job.id, run_id=run.id, attempt_id=attempt.id,
+               route="route_a", bundle=bundle, trigger=False)
+    assert jobs.list_artifacts(job.id, data_dir=data) == before
+    assert jobs.get_run(run.id, data_dir=data).phase == "cancelling"

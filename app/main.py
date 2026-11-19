@@ -22,7 +22,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.formparsers import MultiPartException
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app import api_v1, i18n, status
 from app.backend import (
@@ -206,7 +209,64 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
     return JSONResponse({"detail": exc.errors()}, status_code=422)
 
 
-@app.middleware("http")
+class V1UploadLimit:
+    """Limit bytes delivered to the multipart parser and preserve v1 errors."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        request = Request(scope)
+        upload = (
+            api_v1.is_v1(request)
+            and request.method == "POST"
+            and (
+                request.url.path == "/api/jobs"
+                or re.fullmatch(r"/api/jobs/[^/]+/deliverables", request.url.path)
+            )
+        )
+        if not upload:
+            await self.app(scope, receive, send)
+            return
+
+        limit = api_v1.MAX_REQUEST_BYTES
+        error = _v1_error(413, "The request body exceeds the 24 MiB limit.", "payload_too_large")
+        length = request.headers.get("content-length")
+        if length is not None:
+            normalized = length.lstrip("0") or "0"
+            if not re.fullmatch(r"[0-9]+", length) or len(normalized) > 8 or int(normalized) > limit:
+                await error(scope, receive, send)
+                return
+
+        received = 0
+        exceeded = False
+
+        async def bounded_receive():
+            nonlocal received, exceeded
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > limit:
+                    exceeded = True
+                    # Starlette closes incomplete spooled uploads on this parser error.
+                    raise MultiPartException("Multipart body exceeds the request size limit.")
+            return message
+
+        async def send_response(message):
+            if not exceeded:
+                await send(message)
+            elif message["type"] == "http.response.start":
+                await error(scope, receive, send)
+
+        await self.app(scope, bounded_receive, send_response)
+
+
+app.add_middleware(V1UploadLimit)
+
+
 async def contract_version_gate(request: Request, call_next):
     """Select the v1 wire format and enforce upload/version limits.
 
@@ -226,16 +286,6 @@ async def contract_version_gate(request: Request, call_next):
             )
         request.state.v1 = True
 
-    if getattr(request.state, "v1", False):
-        content_length = request.headers.get("content-length")
-        if content_length and request.method in {"POST", "PUT", "PATCH"}:
-            try:
-                too_large = int(content_length) > api_v1.MAX_REQUEST_BYTES
-            except ValueError:
-                too_large = True
-            if too_large:
-                return _v1_error(413, "The request body exceeds the 24 MiB limit.", "payload_too_large")
-
     response = await call_next(request)
     if getattr(request.state, "v1", False):
         response.headers[api_v1.VERSION_HEADER] = api_v1.CONTRACT_VERSION
@@ -249,6 +299,8 @@ async def security_gate(request: Request, call_next):
     """Enforce the local-only session/CSRF security boundary."""
     host = (request.headers.get("host") or "").split(":")[0].strip().lower()
     if not _host_allowed(host):
+        if api_v1.is_v1(request):
+            return _v1_error(403, "Local access only (host check failed).")
         return JSONResponse({"detail": "Local access only (host check failed)."}, status_code=403)
 
     path = request.url.path
@@ -276,6 +328,8 @@ async def security_gate(request: Request, call_next):
 
     session = request.cookies.get(SESSION_COOKIE)
     if not session or not secrets.compare_digest(session, SESSION_TOKEN):
+        if api_v1.is_v1(request):
+            return _v1_error(401, "Authentication required. Open the launcher URL to start a session.")
         if request.method == "GET" and "text/html" in (request.headers.get("accept") or ""):
             return HTMLResponse(_auth_required_page(), status_code=401)
         return JSONResponse(
@@ -298,6 +352,9 @@ async def security_gate(request: Request, call_next):
                 )
 
     return await call_next(request)
+
+
+app.middleware("http")(contract_version_gate)
 
 
 def _require_csrf(token: str) -> None:
@@ -1528,7 +1585,7 @@ async def upload_deliverable(request: Request, job_id: str, file: UploadFile = F
         artifact = result.get("artifact") if isinstance(result, dict) else None
         if not isinstance(artifact, dict):
             raise HTTPException(status_code=502, detail="The controller returned no artifact metadata.")
-        return JSONResponse(api_v1.artifact_view(artifact, job_id, None, 0), status_code=201)
+        return JSONResponse(api_v1.artifact_view(artifact, job_id, 0), status_code=201)
     return JSONResponse(result, status_code=201)
 
 
@@ -1547,8 +1604,10 @@ async def artifact_metadata(request: Request, artifact_id: str):
 
 
 @app.get("/api/artifacts/{artifact_id}/download")
-async def artifact_download(artifact_id: str):
-    """Proxy registered artifact bytes; a missing byte stream is a 404, not an empty file."""
+async def artifact_download(request: Request, artifact_id: str):
+    """Proxy registered artifacts using the selected browser contract."""
+    if api_v1.is_v1(request):
+        return await _v1_artifact_download(artifact_id)
     getter = getattr(BACKEND, "get_artifact_bytes", None)
     if getter is None:
         raise HTTPException(
@@ -1556,6 +1615,36 @@ async def artifact_download(artifact_id: str):
             detail="Artifact downloads are only available in controller (http) mode.",
         )
     content, media_type, filename = getter(artifact_id)
+    return _artifact_attachment(artifact_id, content, media_type, filename)
+
+
+@app.get("/api/jobs/{job_id}/artifacts/{artifact_id}/download")
+async def job_artifact_download(request: Request, job_id: str, artifact_id: str):
+    if not api_v1.is_v1(request):
+        raise HTTPException(404, detail="Not Found")
+    return await _v1_artifact_download(artifact_id, job_id=job_id)
+
+
+async def _v1_artifact_download(artifact_id: str, *, job_id: str | None = None):
+    getter = getattr(BACKEND, "get_verified_artifact_bytes", None)
+    if getter is None:
+        raise api_v1.ApiError(404, "not_found", "Artifact not found.")
+    try:
+        content, media_type, filename = await run_in_threadpool(getter, artifact_id, job_id=job_id)
+    except BackendError as exc:
+        if exc.status_code == 404:
+            raise api_v1.ApiError(404, "not_found", "Artifact not found.") from exc
+        if exc.status_code == 409:
+            raise api_v1.ApiError(
+                409, "artifact_unavailable", "The registered artifact is unavailable or failed integrity checks.",
+            ) from exc
+        raise api_v1.ApiError(503, "capability_unavailable", "Artifact downloads are unavailable.") from exc
+    attachment = _artifact_attachment(artifact_id, content, media_type, filename)
+    attachment.headers["X-Content-Type-Options"] = "nosniff"
+    return attachment
+
+
+def _artifact_attachment(artifact_id: str, content: bytes, media_type: str, filename: str) -> Response:
     safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", filename) or f"{artifact_id}.bin"
     return Response(
         content=content,

@@ -10,6 +10,7 @@ These tests pin the honest-reporting rules for the GUI side:
 from __future__ import annotations
 
 import json
+import hashlib
 
 import httpx
 import pytest
@@ -198,6 +199,26 @@ def test_http_backend_missing_artifact_is_404():
     with pytest.raises(BackendError) as excinfo:
         backend.get_artifact_bytes("missing")
     assert excinfo.value.status_code == 404
+
+
+@pytest.mark.parametrize(("verified_digest", "status"), [
+    (hashlib.sha256(b"Registered synthetic bytes.").hexdigest(), 409),
+    (None, 503),
+])
+def test_versioned_download_refuses_unverified_transport_bytes(verified_digest, status):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/jobs/job-a/artifacts/artifact-a/download"
+        assert request.headers["X-BinaryRepair-Contract-Version"] == "1"
+        headers = {} if verified_digest is None else {"X-BinaryRepair-Artifact-SHA256": verified_digest}
+        return httpx.Response(200, content=b"Unexpected synthetic bytes.", headers=headers)
+
+    backend = _http_backend(handler)
+    try:
+        with pytest.raises(BackendError) as error:
+            backend.get_verified_artifact_bytes("artifact-a", job_id="job-a")
+        assert error.value.status_code == status
+    finally:
+        backend.close()
 
 
 def _client() -> TestClient:

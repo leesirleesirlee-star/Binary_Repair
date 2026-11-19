@@ -42,13 +42,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.db.connection import connect
 from app.services.assistant_key_store import is_secret_file
 from app.domain.analysis import ANALYSIS_ROLES, AnalysisArtifacts
 from app.domain.interface import InterfaceCheckError, check_interface
 from app.domain.v4 import V4EvidenceError, validate_v4_evidence
-from app.services import jobs, worker
-from tools.host_importer import import_bundle
+from app.services import worker
+from tools.host_importer import SHA256, ResultReceipt, receive_result
 
 GATES = ("V0", "V1", "V2", "V3", "V4", "V5")
 STATUS = {"passed", "failed", "not_run", "unknown", "timed_out"}
@@ -72,12 +71,15 @@ def _sha256(path: Path) -> str:
 
 
 def _safe_file(root: Path, relative: str) -> Path:
-    if not relative or Path(relative).is_absolute():
+    rel = Path(relative)
+    if not relative or rel.anchor or ".." in rel.parts:
         raise IngestError(f"artifact path must be relative: {relative!r}")
     root_resolved = root.resolve()
-    raw = root_resolved / relative
-    if raw.is_symlink():
-        raise IngestError(f"artifact path is a symlink: {relative!r}")
+    raw = root_resolved
+    for piece in rel.parts:
+        raw = raw / piece
+        if raw.is_symlink():
+            raise IngestError(f"artifact path is a symlink: {relative!r}")
     candidate = raw.resolve()
     try:
         candidate.relative_to(root_resolved)
@@ -187,7 +189,7 @@ def _read_manifest(bundle: Path) -> dict[str, Any]:
     if not path.is_file():
         raise IngestError("bundle.json is missing")
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(_safe_file(bundle, "bundle.json").read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise IngestError(f"bundle.json is invalid: {exc}") from exc
     if not isinstance(data, dict):
@@ -195,12 +197,8 @@ def _read_manifest(bundle: Path) -> dict[str, Any]:
     if data.get("schema_version") != 1:
         raise IngestError("bundle.json schema_version must be 1")
     candidate = data.get("candidate_sha256")
-    if not isinstance(candidate, str) or len(candidate) != 64:
-        raise IngestError("bundle.json candidate_sha256 must be 64 hex characters")
-    try:
-        int(candidate, 16)
-    except ValueError as exc:
-        raise IngestError("bundle.json candidate_sha256 must be hex") from exc
+    if not isinstance(candidate, str) or SHA256.fullmatch(candidate) is None:
+        raise IngestError("bundle.json candidate_sha256 must be 64 lowercase hex characters")
     gates = data.get("gates") or {}
     if not isinstance(gates, dict):
         raise IngestError("bundle.json gates must be an object")
@@ -216,9 +214,7 @@ def _read_manifest(bundle: Path) -> dict[str, Any]:
 
 def _register_file(
     *,
-    data_dir: Path,
-    job_id: str,
-    attempt_id: str,
+    receipt: ResultReceipt,
     bundle: Path,
     relative: str,
     role: str,
@@ -227,32 +223,36 @@ def _register_file(
     size = source.stat().st_size
     if size > MAX_FILE_BYTES:
         raise IngestError(f"artifact too large: {relative}")
+    job_id, attempt_id = receipt.binding["job_id"], receipt.binding["attempt_id"]
     destination_rel = f"jobs/{job_id}/evidence/{attempt_id}/{Path(relative).name}"
-    destination = data_dir / destination_rel
+    destination = receipt.data_dir / destination_rel
+    digest = _sha256(source)
+    row = receipt.connection.execute(
+        "SELECT id, sha256, attempt_id FROM artifacts WHERE job_id = ? AND relative_path = ?",
+        (job_id, destination_rel),
+    ).fetchone()
+    if row is not None:
+        if (
+            row["attempt_id"] != attempt_id or row["sha256"] != digest
+            or not destination.is_file() or _sha256(destination) != digest
+        ):
+            raise IngestError(f"conflicting existing artifact: {destination_rel}")
+        return str(row["id"])
+
     destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(source, destination)
-    digest = _sha256(destination)
+    with source.open("rb") as input_file, destination.open("xb") as output_file:
+        receipt.created.append(destination)
+        shutil.copyfileobj(input_file, output_file)
+    if _sha256(destination) != digest:
+        raise IngestError(f"artifact changed during receipt: {relative}")
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    connection = connect(data_dir)
-    try:
-        with connection:
-            row = connection.execute(
-                "SELECT id, sha256 FROM artifacts WHERE job_id = ? AND relative_path = ?",
-                (job_id, destination_rel),
-            ).fetchone()
-            if row is not None:
-                if str(row["sha256"]) != digest:
-                    raise IngestError(f"conflicting existing artifact: {destination_rel}")
-                return str(row["id"])
-            artifact_id = uuid.uuid4().hex
-            connection.execute(
-                "INSERT INTO artifacts "
-                "(id, job_id, attempt_id, relative_path, sha256, size_bytes, media_type, role, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'application/octet-stream', ?, ?)",
-                (artifact_id, job_id, attempt_id, destination_rel, digest, size, role, now),
-            )
-    finally:
-        connection.close()
+    artifact_id = uuid.uuid4().hex
+    receipt.connection.execute(
+        "INSERT INTO artifacts "
+        "(id, job_id, attempt_id, relative_path, sha256, size_bytes, media_type, role, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, 'application/octet-stream', ?, ?)",
+        (artifact_id, job_id, attempt_id, destination_rel, digest, size, role, now),
+    )
     return artifact_id
 
 
@@ -267,35 +267,32 @@ def ingest(
     trigger: bool = True,
 ) -> dict[str, Any]:
     data_dir = Path(data_dir)
-    bundle = Path(bundle)
-    attempt = jobs.get_attempt(attempt_id, data_dir=data_dir)
-    if attempt is None:
-        raise IngestError("unknown attempt")
-    if attempt.run_id != run_id:
-        raise IngestError("attempt does not belong to run")
-    if attempt.route != route:
-        raise IngestError("route does not match attempt")
-    run = jobs.get_run(run_id, data_dir=data_dir)
-    if run is None or run.job_id != job_id:
-        raise IngestError("run does not belong to job")
-    job = jobs.get_job(job_id, data_dir=data_dir)
-    if job is None:
-        raise IngestError("unknown job")
+    try:
+        with receive_result(
+            data_dir=data_dir, job_id=job_id, run_id=run_id, attempt_id=attempt_id, route=route,
+        ) as receipt:
+            result = _ingest(receipt, Path(bundle))
+    except ValueError as exc:
+        if isinstance(exc, IngestError):
+            raise
+        raise IngestError(str(exc)) from exc
+    imported = result["imported"]
+    imported["worker_processed"] = worker.run_once(data_dir=data_dir) if trigger and imported["changed"] else 0
+    return result
+
+
+def _ingest(receipt: ResultReceipt, bundle: Path) -> dict[str, Any]:
+    route = receipt.binding["route"]
     target_entry = ""
-    if run.contract_id:
-        connection = connect(data_dir)
+    row = receipt.connection.execute(
+        "SELECT c.body_json FROM contracts AS c JOIN runs AS r ON c.id = r.contract_id "
+        "AND c.job_id = r.job_id WHERE r.id = ?", (receipt.binding["run_id"],),
+    ).fetchone()
+    if row is not None:
         try:
-            row = connection.execute(
-                "SELECT body_json FROM contracts WHERE id = ? AND job_id = ?",
-                (run.contract_id, job_id),
-            ).fetchone()
-        finally:
-            connection.close()
-        if row is not None:
-            try:
-                target_entry = str(json.loads(row["body_json"]).get("target_entry") or "")
-            except (TypeError, ValueError):
-                target_entry = ""
+            target_entry = str(json.loads(row["body_json"]).get("target_entry") or "")
+        except (TypeError, ValueError):
+            target_entry = ""
     if not bundle.is_dir():
         raise IngestError("bundle must be a directory")
     if not (bundle / "bundle.json").is_file() and (bundle / "handoff.json").is_file():
@@ -304,8 +301,17 @@ def ingest(
         manifest = _read_manifest(bundle)
         legacy_files = []
     _verify_sums(bundle)
-    if manifest.get("route") not in (None, route):
-        raise IngestError("bundle route does not match attempt")
+    receipt.validate_binding(manifest)
+    v0 = (manifest.get("gates") or {}).get("V0") or {}
+    if v0.get("status") == "passed":
+        names = v0.get("artifacts")
+        if not isinstance(names, list) or not names or any(not isinstance(name, str) for name in names):
+            raise IngestError("gate V0 passed without evidence")
+        if not any(_sha256(_safe_file(bundle, name)) == manifest["candidate_sha256"] for name in names):
+            raise IngestError(
+                "gate V0 evidence does not contain the declared candidate "
+                f"{manifest['candidate_sha256']}"
+            )
 
     total = 0
     evidence: dict[str, str] = {}
@@ -363,7 +369,7 @@ def ingest(
                     validate_v4_evidence(
                         payload,
                         candidate_sha256=manifest["candidate_sha256"],
-                        original_sha256=job.original_sha256,
+                        original_sha256=receipt.binding["original_sha256"],
                         require_independent=True,
                     )
                 except (OSError, ValueError, json.JSONDecodeError, V4EvidenceError) as exc:
@@ -380,8 +386,7 @@ def ingest(
             total += path.stat().st_size
             if total > MAX_TOTAL_BYTES:
                 raise IngestError("bundle exceeds total size limit")
-            artifact_id = _register_file(data_dir=data_dir, job_id=job_id,
-                                         attempt_id=attempt_id, bundle=bundle,
+            artifact_id = _register_file(receipt=receipt, bundle=bundle,
                                          relative=name, role=f"{gate.lower()}_evidence")
             ids.append(artifact_id)
             ids_by_name[name] = artifact_id
@@ -428,12 +433,11 @@ def ingest(
             except Exception as exc:
                 raise IngestError(f"invalid analysis artifact {item['path']}: {exc}") from exc
         analysis_ids.append(_register_file(
-            data_dir=data_dir, job_id=job_id, attempt_id=attempt_id, bundle=bundle,
+            receipt=receipt, bundle=bundle,
             relative=item["path"], role=role,
         ))
     if manifest.get("comparison"):
-        _register_file(data_dir=data_dir, job_id=job_id, attempt_id=attempt_id,
-                       bundle=bundle, relative=str(manifest["comparison"]),
+        _register_file(receipt=receipt, bundle=bundle, relative=str(manifest["comparison"]),
                        role="behavior_comparison")
 
     for name in legacy_files:
@@ -442,14 +446,13 @@ def ingest(
         # wrong (M4 ac84862 finding).
         if name in ("handoff.json", "SHA256SUMS", "result-bundle.json"):
             continue
-        _register_file(data_dir=data_dir, job_id=job_id, attempt_id=attempt_id,
-                       bundle=bundle, relative=name, role="legacy_artifact")
+        _register_file(receipt=receipt, bundle=bundle, relative=name, role="legacy_artifact")
 
     supplemental_id = None
     legacy_result = bundle / "result-bundle.json"
     if legacy_result.is_file():
         supplemental_id = _register_file(
-            data_dir=data_dir, job_id=job_id, attempt_id=attempt_id,
+            receipt=receipt,
             bundle=bundle, relative="result-bundle.json",
             role="legacy_result_bundle",
         )
@@ -465,10 +468,7 @@ def ingest(
             **details,
         },
     }
-    imported = import_bundle(
-        data_dir=data_dir, job_id=job_id, run_id=run_id, attempt_id=attempt_id,
-        bundle=payload, route=route, trigger=trigger,
-    )
+    imported = receipt.store(payload)
     return {"imported": imported, "evidence": evidence, "analysis_artifact_ids": analysis_ids}
 
 

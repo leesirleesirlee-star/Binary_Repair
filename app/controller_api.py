@@ -39,7 +39,9 @@ import hmac
 import json
 import os
 import re
+import sqlite3
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -49,7 +51,9 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFi
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+from app import api_v1
 from app.db.connection import connect
+from app.domain.contracts import SecurityContract
 from app.services import jobs
 
 APP_ENV = "BINARYREPAIR_DATA_DIR"
@@ -148,7 +152,19 @@ def _meta_path(job_id: str) -> Path:
     return _data_dir() / "jobs" / job_id / "meta.json"
 
 
-def _read_meta(job_id: str) -> dict[str, Any]:
+def _read_meta(job_id: str, *, connection: sqlite3.Connection | None = None) -> dict[str, Any]:
+    if connection is None:
+        db = connect(_data_dir())
+        try:
+            return _read_meta(job_id, connection=db)
+        finally:
+            db.close()
+    row = connection.execute(
+        "SELECT payload_json FROM controller_job_metadata WHERE job_id = ?", (job_id,),
+    ).fetchone()
+    if row is not None:
+        return json.loads(row["payload_json"])
+    # Existing jobs keep their saved draft. The next write adopts it into SQLite.
     path = _meta_path(job_id)
     if not path.exists():
         return {}
@@ -159,13 +175,203 @@ def _read_meta(job_id: str) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _write_meta(job_id: str, payload: dict[str, Any]) -> None:
-    path = _meta_path(job_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, sort_keys=True, ensure_ascii=True, indent=2),
-        encoding="utf-8",
+def _write_meta(
+    job_id: str, payload: dict[str, Any], *, connection: sqlite3.Connection,
+) -> None:
+    connection.execute(
+        "INSERT INTO controller_job_metadata (job_id, payload_json) VALUES (?, ?) "
+        "ON CONFLICT(job_id) DO UPDATE SET payload_json = excluded.payload_json",
+        (job_id, json.dumps(payload, sort_keys=True, ensure_ascii=True)),
     )
+
+
+@contextmanager
+def _job_write():
+    connection = connect(_data_dir())
+    try:
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            yield connection
+    finally:
+        connection.close()
+
+
+def _require_idle(connection: sqlite3.Connection, job_id: str) -> None:
+    active = connection.execute(
+        "SELECT 1 FROM runs WHERE job_id = ? AND phase NOT IN ('finished', 'cancelled') LIMIT 1",
+        (job_id,),
+    ).fetchone()
+    if active is not None:
+        raise _review_error(409, "invalid_transition", "A run is already active for this job.")
+
+
+def _review_error(status: int, code: str, detail: str, **fields: Any) -> HTTPException:
+    return HTTPException(status, detail={"detail": detail, "code": code, **fields})
+
+
+def _approved_review_digest(meta: dict[str, Any]) -> str | None:
+    approval = meta.get("approval")
+    digest = approval.get("review_binding_digest") if isinstance(approval, dict) else None
+    return digest if isinstance(digest, str) else None
+
+
+TYPED_CONTRACT_KEY = "typed_contract_json"
+TYPED_CONTRACT_SHA_KEY = "typed_contract_sha256"
+REVIEW_SCOPE_MISSING = "The approved scope is not bound to a canonical contract."
+
+
+def _parse_typed_contract(text: str) -> SecurityContract | None:
+    """Validate the analyst-supplied canonical contract before anything is stored."""
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="'contract' must be a JSON object.") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="'contract' must be a JSON object.")
+    try:
+        return SecurityContract.from_dict(payload)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid typed contract: {exc}") from exc
+
+
+def _typed_contract(meta: dict[str, Any]) -> SecurityContract | None:
+    text = meta.get(TYPED_CONTRACT_KEY)
+    if not isinstance(text, str):
+        return None
+    try:
+        payload = json.loads(text)
+        typed = SecurityContract.from_dict(payload) if isinstance(payload, dict) else None
+    except (TypeError, ValueError):
+        return None
+    if typed is None or typed.sha256() != meta.get(TYPED_CONTRACT_SHA_KEY):
+        return None
+    return typed
+
+
+def _review_text_from_typed(typed: SecurityContract) -> dict[str, Any]:
+    return {
+        "valid_domain": typed.valid_domain,
+        "forbidden": typed.forbidden_behavior,
+        "invalid_outcome": typed.invalid_input_response or "",
+        "assumptions": list(typed.environment_assumptions),
+    }
+
+
+def _contract_from_typed(typed: SecurityContract) -> dict[str, Any]:
+    body = _review_text_from_typed(typed)
+    return {
+        "revision": 1,
+        "sha256": _sha_json(body),
+        "approved": False,
+        "approved_at": None,
+        "reviewer_label": None,
+        **body,
+    }
+
+
+def _canonical_review_contract(
+    typed: SecurityContract, contract: dict[str, Any],
+) -> SecurityContract:
+    """Rebuild the canonical contract from the typed source with the reviewed texts applied."""
+    data = typed.to_dict()
+    data["valid_domain"] = str(contract.get("valid_domain") or "").strip()
+    data["forbidden_behavior"] = str(contract.get("forbidden") or "").strip()
+    invalid_response = str(contract.get("invalid_outcome") or "").strip()
+    if typed.input_mode != "none":
+        data["invalid_input_response"] = invalid_response
+    elif invalid_response:
+        raise ValueError("invalid_input_response must be empty for contracts with no program input.")
+    data["environment_assumptions"] = list(contract.get("assumptions") or [])
+    return SecurityContract.from_dict(data)
+
+
+def _review_binding_extra(meta: dict[str, Any]) -> dict[str, Any]:
+    """Scope descriptors and digests the browser card must show before approval."""
+    typed = _typed_contract(meta)
+    if typed is None:
+        return {}
+    edits = ", ".join(typed.authorized_edits) or "none"
+    calls = ", ".join(typed.allowed_calls) or "none"
+    if typed.input_mode == "none":
+        shape = "No program input."
+    else:
+        terminator = "including the terminator" if typed.capacity_includes_terminator else "excluding the terminator"
+        shape = (
+            f"{typed.input_mode} input. Capacity {typed.dest_capacity_bytes} bytes ({terminator}). "
+            f"Maximum valid input {typed.max_valid_input_bytes} bytes. "
+            f"Invalid input exits with code {typed.invalid_exit_code}, "
+            f"stdout {json.dumps(typed.invalid_stdout)}, and stderr {json.dumps(typed.invalid_stderr)}."
+        )
+    extra: dict[str, Any] = {
+        "typed_contract_sha256": typed.sha256(),
+        "patch_policy": {
+            "id": "reviewed-contract-scope",
+            "label": "Reviewed contract scope",
+            "summary": f"Authorized edits: {edits}. Allowed calls: {calls}.",
+        },
+        "verification_scope": {
+            "id": "v0-v5-both-routes",
+            "label": "V0-V5, both routes",
+            "summary": (
+                f"Target {typed.target_entry} ({typed.target_signature}). {shape} "
+                f"Valid behavior is {typed.valid_behavior}. "
+                f"Required obligations are {', '.join(typed.required_obligations)}."
+            ),
+        },
+        "canonical_contract_sha256": None,
+    }
+    try:
+        extra["canonical_contract_sha256"] = _canonical_review_contract(
+            typed, meta.get("contract") or _contract_body()
+        ).sha256()
+    except (TypeError, ValueError):
+        extra["canonical_contract_sha256"] = None
+    return extra
+
+
+def _approval_scope_bound(meta: dict[str, Any], row: Any) -> bool:
+    """True only when the recorded approval is backed by the canonical approved contract."""
+    approval = meta.get("approval")
+    typed_sha = meta.get(TYPED_CONTRACT_SHA_KEY)
+    typed = _typed_contract(meta)
+    if not isinstance(approval, dict) or typed is None:
+        return False
+    if approval.get(TYPED_CONTRACT_SHA_KEY) != typed_sha:
+        return False
+    canonical_sha = approval.get("canonical_contract_sha256")
+    if not isinstance(canonical_sha, str) or canonical_sha != str(row["sha256"]):
+        return False
+    review = meta.get("contract")
+    if not isinstance(review, dict):
+        return False
+    try:
+        canonical = _canonical_review_contract(typed, review)
+    except (TypeError, ValueError):
+        return False
+    return (
+        row["body_json"] == canonical.canonical_json()
+        and canonical.sha256() == canonical_sha
+    )
+
+
+def _review_view(record: jobs.JobRecord, meta: dict[str, Any]) -> dict[str, Any]:
+    snapshot = {
+        "contract": meta.get("contract") or _contract_body(),
+        "original_sha256": record.original_sha256,
+        "manifest_sha256": meta.get("manifest_sha256"),
+        "environment": meta.get("environment"),
+        "approved_review_digest": _approved_review_digest(meta),
+        "data_source": "controller-http",
+    }
+    snapshot.update(_review_binding_extra(meta))
+    return api_v1._contract_view(snapshot)
+
+
+def _review_identity(contract: dict[str, Any]) -> dict[str, Any]:
+    return {key: contract[key] for key in ("revision", "sha256", "review_binding_digest")}
 
 
 def _job_or_404(job_id: str) -> jobs.JobRecord:
@@ -259,17 +465,24 @@ def _job_artifact_or_404(job_id: str, artifact_id: str) -> dict[str, Any]:
     return row
 
 
-def _verified_artifact_response(job_id: str, artifact_id: str) -> FileResponse:
+def _verified_artifact_response(job_id: str, artifact_id: str, *, include_digest: bool = False) -> FileResponse:
     row = _job_artifact_or_404(job_id, artifact_id)
     path = _artifact_file(row)
     problem = _artifact_problem(row, path, verify_hash=True)
     if problem or path is None:
         raise HTTPException(status_code=409, detail=problem or "artifact bytes are not on disk")
+    headers = None
+    if include_digest:
+        digest = str(row.get("sha256") or "")
+        if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise HTTPException(status_code=409, detail="Artifact has no valid registered digest.")
+        headers = {"X-BinaryRepair-Artifact-SHA256": digest}
     return FileResponse(
         path,
         media_type=row.get("media_type") or "application/octet-stream",
         filename=path.name,
         content_disposition_type="attachment",
+        headers=headers,
     )
 
 
@@ -623,7 +836,22 @@ def _v3_payload(job_id: str) -> dict[str, Any]:
     }
 
 
-def _execution_status(record: jobs.JobRecord, run_row: Any) -> dict[str, Any]:
+EXECUTOR_PREFLIGHT_TTL_SECONDS = 30
+
+
+def _fresh_executor_preflight(observed_at: str | None) -> bool:
+    if observed_at is None:
+        return False
+    try:
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(observed_at)).total_seconds()
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return 0 <= age < EXECUTOR_PREFLIGHT_TTL_SECONDS
+
+
+def _execution_status(
+    record: jobs.JobRecord, run_row: Any, *, include_executor_preflight: bool = False,
+) -> dict[str, Any]:
     """Derive execution state from persisted rows.
 
     Record 87 asks for an ``execution.status``. The execution-bridge sidecar it
@@ -660,6 +888,13 @@ def _execution_status(record: jobs.JobRecord, run_row: Any) -> dict[str, Any]:
     outcome = run_row["outcome"] if "outcome" in keys else None
     if phase == "queued":
         status = "queued"
+        if include_executor_preflight and "executor_observed_at" in keys and _fresh_executor_preflight(
+            run_row["executor_observed_at"]
+        ):
+            status = "waiting_for_executor"
+            base["reason_code"] = "executor_unavailable"
+    elif phase == "cancelling":
+        status = "cancelling"
     elif phase in RUN_ACTIVE_PHASES:
         status = "running"
     elif phase == "finished":
@@ -674,7 +909,7 @@ def _execution_status(record: jobs.JobRecord, run_row: Any) -> dict[str, Any]:
         "run_id": run_row["id"],
         "phase": phase,
         "outcome": outcome,
-        "started_at": run_row["started_at"] if "started_at" in keys else None,
+        "started_at": run_row["started_at"] if status != "waiting_for_executor" and "started_at" in keys else None,
         "finished_at": run_row["finished_at"] if "finished_at" in keys else None,
     }
 
@@ -728,7 +963,9 @@ def _agent_state(
     }
 
 
-def _snapshot(record: jobs.JobRecord, meta: dict[str, Any]) -> dict[str, Any]:
+def _snapshot(
+    record: jobs.JobRecord, meta: dict[str, Any], *, include_executor_preflight: bool = False,
+) -> dict[str, Any]:
     contract = dict(meta.get("contract") or _contract_body())
     contract.setdefault("revision", 1)
     contract.setdefault("sha256", _sha_json({k: v for k, v in contract.items() if k not in {"revision", "sha256", "approved", "approved_at", "reviewer_label"}}))
@@ -744,7 +981,11 @@ def _snapshot(record: jobs.JobRecord, meta: dict[str, Any]) -> dict[str, Any]:
     if run is not None:
         connection = connect(_data_dir())
         try:
-            run_row = connection.execute("SELECT * FROM runs WHERE id = ?", (run.id,)).fetchone()
+            run_row = connection.execute(
+                "SELECT runs.*, run_executor_preflight.observed_at AS executor_observed_at "
+                "FROM runs LEFT JOIN run_executor_preflight ON run_executor_preflight.run_id = runs.id "
+                "WHERE runs.id = ?", (run.id,),
+            ).fetchone()
         finally:
             connection.close()
         run_verdict = {
@@ -779,7 +1020,9 @@ def _snapshot(record: jobs.JobRecord, meta: dict[str, Any]) -> dict[str, Any]:
         "id": record.id,
         "demo": False,
         "data_source": "controller-http",
-        "execution": _execution_status(record, run_row),
+        "execution": _execution_status(
+            record, run_row, include_executor_preflight=include_executor_preflight,
+        ),
         "execution_phase": "not_started" if record.phase == "draft" else record.phase,
         "agent": _agent_state(record, run_row, analysis["status"]),
         "filename": record.filename,
@@ -871,6 +1114,7 @@ def healthz() -> dict[str, Any]:
 
 @app.post("/api/jobs", status_code=201)
 async def create_job(
+    request: Request,
     binary: UploadFile = File(...),
     defect: str = Form(""),
     valid_tests: str = Form(""),
@@ -879,6 +1123,7 @@ async def create_job(
     forbidden: str = Form(""),
     invalid_outcome: str = Form(""),
     assumptions: str = Form(""),
+    contract: str = Form(""),
 ) -> dict[str, Any]:
     _require_english(
         {
@@ -889,6 +1134,7 @@ async def create_job(
             "forbidden": forbidden,
             "invalid_outcome": invalid_outcome,
             "assumptions": assumptions,
+            "contract": contract,
         }
     )
     payload = await binary.read()
@@ -914,30 +1160,56 @@ async def create_job(
             detail="Uploaded filename must be a plain basename without path traversal.",
         )
 
-    filename = _ascii_filename(raw_filename)
-    record = jobs.create_job(
-        original_bytes=payload,
-        filename=filename,
-        defect_description=defect or "Defect description not provided.",
-        data_dir=_data_dir(),
-    )
     tests = [line.strip() for line in valid_tests.splitlines() if line.strip()]
-    contract = _contract_body(
+    typed = _parse_typed_contract(contract)
+    review_contract = _contract_body(
         valid_domain=valid_domain,
         forbidden=forbidden,
         invalid_outcome=invalid_outcome,
         assumptions=assumptions,
     )
-    _write_meta(
-        record.id,
-        {
-            "valid_tests": tests,
-            "environment": environment.strip()
-            or "Ubuntu x86-64 VM (execution not implemented)",
-            "contract": contract,
-            "manifest_sha256": _sha_json(tests),
-            "scope_sha256": contract["sha256"],
-        },
+    if typed is not None:
+        seeded = _contract_from_typed(typed)
+        seeded_text = {
+            "valid_domain": str(seeded["valid_domain"]).strip(),
+            "forbidden": str(seeded["forbidden"]).strip(),
+            "invalid_outcome": str(seeded["invalid_outcome"]).strip(),
+            "assumptions": "\n".join(seeded["assumptions"]),
+        }
+        supplied = {
+            "valid_domain": valid_domain.strip(),
+            "forbidden": forbidden.strip(),
+            "invalid_outcome": invalid_outcome.strip(),
+            "assumptions": assumptions.strip(),
+        }
+        for name, value in supplied.items():
+            if value and value != seeded_text[name]:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Field '{name}' conflicts with the typed contract; "
+                        "edit the review after creation instead."
+                    ),
+                )
+        review_contract = seeded
+    meta: dict[str, Any] = {
+        "valid_tests": tests,
+        "environment": environment.strip()
+        or "Ubuntu x86-64 VM (execution not implemented)",
+        "contract": review_contract,
+        "manifest_sha256": _sha_json(tests),
+        "scope_sha256": review_contract["sha256"],
+        "review_v1": request.headers.get(api_v1.VERSION_HEADER) == api_v1.CONTRACT_VERSION,
+    }
+    if typed is not None:
+        meta[TYPED_CONTRACT_KEY] = typed.canonical_json()
+        meta[TYPED_CONTRACT_SHA_KEY] = typed.sha256()
+    record = jobs.create_job(
+        original_bytes=payload,
+        filename=_ascii_filename(raw_filename),
+        defect_description=defect or "Defect description not provided.",
+        data_dir=_data_dir(),
+        controller_metadata=meta,
     )
     return {"id": record.id, "original_sha256": record.original_sha256, "phase": record.phase}
 
@@ -949,54 +1221,73 @@ def list_job_summaries(limit: int = Query(50, ge=1, le=50)) -> dict[str, Any]:
 
 
 @app.get("/api/jobs/{job_id}")
-def get_snapshot(job_id: str) -> dict[str, Any]:
+def get_snapshot(job_id: str, request: Request) -> dict[str, Any]:
     record = _job_or_404(job_id)
-    return _snapshot(record, _read_meta(job_id))
+    meta = _read_meta(job_id)
+    versioned = request.headers.get(api_v1.VERSION_HEADER) == api_v1.CONTRACT_VERSION
+    snapshot = _snapshot(record, meta, include_executor_preflight=versioned)
+    if versioned:
+        snapshot["approved_review_digest"] = _approved_review_digest(meta)
+        snapshot.update(_review_binding_extra(meta))
+    return snapshot
+
+
+class ReviewedStartRequest(BaseModel):
+    expected_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+@app.post("/api/jobs/{job_id}/reviewed-start")
+def reviewed_start(job_id: str, request: Request, body: ReviewedStartRequest):
+    """Replay or accept a versioned start at the durable controller boundary."""
+    record = _job_or_404(job_id)
+    key = request.headers.get("idempotency-key", "")
+    if not key or len(key) > 128:
+        raise HTTPException(status_code=422, detail="Invalid Idempotency-Key.")
+
+    def approved_inputs(connection):
+        meta = _read_meta(job_id, connection=connection)
+        contract = _review_view(record, meta)
+        if not api_v1.binding_complete(contract["review_binding"]):
+            raise jobs.RunConflict("invalid_transition", "The review binding is incomplete.")
+        if contract["approved"] and body.expected_sha256 == contract["review_binding_digest"]:
+            row = connection.execute(
+                "SELECT * FROM contracts WHERE job_id = ? AND revision = ?",
+                (job_id, contract["revision"]),
+            ).fetchone()
+            if row is not None and _approval_scope_bound(meta, row):
+                return jobs.approval_from_contract(row, manifest_sha256=meta["manifest_sha256"])
+            raise jobs.RunConflict("invalid_transition", REVIEW_SCOPE_MISSING)
+        raise api_v1.ApiError(
+            409, "stale_approval", "The current approval does not cover this review binding.",
+            current=_review_identity(contract),
+        )
+
+    try:
+        run = jobs.start_run(
+            job_id, approval=None, idempotency_key=key, data_dir=_data_dir(),
+            review_digest=body.expected_sha256, approval_for_start=approved_inputs,
+        )
+    except api_v1.ApiError as exc:
+        return JSONResponse({"detail": exc.detail, "code": exc.code, **exc.extra}, status_code=409)
+    except jobs.RunConflict as exc:
+        return JSONResponse({"detail": str(exc), "code": exc.code}, status_code=409)
+    return {"run_id": run.id, "phase": "queued"}
 
 
 @app.post("/api/jobs/{job_id}/start", status_code=202)
 def start(job_id: str, request: Request) -> dict[str, Any]:
     record = _job_or_404(job_id)
-    if record.phase == "cancelled":
-        raise HTTPException(status_code=409, detail="Job is cancelled; a new job is required.")
-    meta = _read_meta(job_id)
-    contract = meta.get("contract")
-    approval_meta = meta.get("approval")
-    if not isinstance(contract, dict):
-        raise HTTPException(status_code=409, detail="Job has no contract.")
-    if not contract.get("approved") or not isinstance(approval_meta, dict):
-        raise HTTPException(status_code=409, detail="Contract is not approved.")
-    revision = int(contract.get("revision", 1))
-    if (
-        int(approval_meta.get("revision", -1)) != revision
-        or str(approval_meta.get("sha256", "")) != str(contract.get("sha256", ""))
-    ):
-        raise HTTPException(status_code=409, detail="Approval is stale.")
+    key = (request.headers.get("idempotency-key") or "http-start-v1").strip()
+    if not key or len(key) > 128:
+        raise HTTPException(status_code=422, detail="Idempotency-Key must be 1-128 characters.")
 
-    row = jobs.get_contract(job_id, revision, data_dir=_data_dir())
-    if row is None:
-        raise HTTPException(status_code=409, detail="No persisted approval for this revision.")
-    manifest = str(meta.get("manifest_sha256") or "0" * 64)
+    def approved_inputs(connection):
+        return _saved_approval(record, _read_meta(job_id, connection=connection), connection)
+
     try:
-        approval = jobs.approval_from_contract(row, manifest_sha256=manifest)
-        approval = jobs.Approval(
-            job_id=approval.job_id,
-            contract_id=approval.contract_id,
-            contract_revision=approval.contract_revision,
-            input_sha256=record.original_sha256,
-            manifest_sha256=approval.manifest_sha256,
-            scope_sha256=approval.scope_sha256,
-            reviewer_label=approval.reviewer_label,
-            approved_at=approval.approved_at,
-        )
-        key = (request.headers.get("idempotency-key") or "http-start-v1").strip()
-        if not key or len(key) > 128:
-            raise HTTPException(status_code=422, detail="Idempotency-Key must be 1-128 characters.")
         run = jobs.start_run(
-            job_id,
-            approval=approval,
-            idempotency_key=key,
-            data_dir=_data_dir(),
+            job_id, approval=None, idempotency_key=key, data_dir=_data_dir(),
+            approval_for_start=approved_inputs,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1006,6 +1297,56 @@ def start(job_id: str, request: Request) -> dict[str, Any]:
         "run_id": run.id,
         "phase": run.phase,
         "created": run.created,
+    }
+
+
+def _saved_approval(record, meta, connection) -> jobs.Approval:
+    state = connection.execute("SELECT phase FROM jobs WHERE id = ?", (record.id,)).fetchone()
+    if state["phase"] == "cancelled":
+        raise HTTPException(409, detail="Job is cancelled; a new job is required.")
+    contract = meta.get("contract")
+    approval_meta = meta.get("approval")
+    if not isinstance(contract, dict):
+        raise HTTPException(409, detail="Job has no contract.")
+    if not contract.get("approved") or not isinstance(approval_meta, dict):
+        raise HTTPException(409, detail="Contract is not approved.")
+    revision = int(contract.get("revision", 1))
+    if (
+        int(approval_meta.get("revision", -1)) != revision
+        or approval_meta.get("sha256") != contract.get("sha256")
+        or (meta.get("review_v1") and not _review_view(record, meta)["approved"])
+    ):
+        raise HTTPException(409, detail="Approval is stale.")
+    row = connection.execute(
+        "SELECT * FROM contracts WHERE job_id = ? AND revision = ?", (record.id, revision),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(409, detail="No persisted approval for this revision.")
+    if meta.get("review_v1") and not _approval_scope_bound(meta, row):
+        raise HTTPException(409, detail=REVIEW_SCOPE_MISSING)
+    return jobs.approval_from_contract(row, manifest_sha256=str(meta.get("manifest_sha256") or "0" * 64))
+
+
+class NamedCancelRequest(BaseModel):
+    run_id: str = Field(min_length=1)
+
+
+@app.post("/api/jobs/{job_id}/cancel-run")
+def cancel_named_run(job_id: str, body: NamedCancelRequest):
+    run_id = body.run_id
+    try:
+        run = jobs.cancel_run(job_id, run_id, data_dir=_data_dir())
+    except jobs.RunConflict as exc:
+        return JSONResponse({"detail": str(exc), "code": exc.code}, status_code=409)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found for this job.")
+    terminal = run["phase"] == "cancelled"
+    return {
+        "run_id": run_id,
+        "phase": "finished" if terminal else "running",
+        "execution": {
+            "run_id": run_id, "status": run["phase"], "terminal": terminal, "reason_code": None,
+        },
     }
 
 
@@ -1039,6 +1380,179 @@ class RetryRequest(BaseModel):
     route: str = Field(pattern="^route_[ab]$")
 
 
+class ReviewEditRequest(BaseModel):
+    expected_revision: int = Field(ge=1, strict=True)
+    valid_domain: str | None = None
+    forbidden: str | None = None
+    invalid_outcome: str | None = None
+    assumptions: str | None = None
+    valid_tests: str | None = Field(default=None, max_length=api_v1.MAX_FIELD_BYTES)
+
+
+@app.post("/api/jobs/{job_id}/reviewed-contract")
+def edit_review(job_id: str, body: ReviewEditRequest) -> dict[str, Any]:
+    record = _job_or_404(job_id)
+    with _job_write() as connection:
+        _require_idle(connection, job_id)
+        meta = _read_meta(job_id, connection=connection)
+        current = _review_view(record, meta)
+        if body.expected_revision != current["revision"]:
+            raise _review_error(
+                409, "stale_revision", "The contract changed since this page loaded.",
+                current=_review_identity(current),
+            )
+        saved_fields = {
+            name: current[name]
+            for name in ("valid_domain", "forbidden", "invalid_outcome", "assumptions")
+        }
+        fields = saved_fields.copy()
+        text_changes = body.model_dump(exclude={"expected_revision", "valid_tests"}, exclude_none=True)
+        for name, value in text_changes.items():
+            fields[name] = api_v1._assumptions(value) if name == "assumptions" else value.strip()
+        typed = _typed_contract(meta)
+        if typed is not None:
+            try:
+                _canonical_review_contract(typed, fields)
+            except (TypeError, ValueError) as exc:
+                raise _review_error(
+                    422, "invalid_input", f"The reviewed text cannot form a canonical contract: {exc}",
+                ) from exc
+        if body.valid_tests is not None:
+            if not body.valid_tests.isascii():
+                raise _review_error(422, "invalid_input", "Test manifest text must use ASCII.")
+            tests = api_v1._assumptions(body.valid_tests)
+            meta.update(valid_tests=tests, manifest_sha256=_sha_json(tests))
+        meta["contract"] = {
+            **fields,
+            "revision": current["revision"] + 1,
+            "sha256": current["sha256"] if fields == saved_fields else _sha_json(fields),
+            "approved": False,
+            "approved_at": None,
+            "reviewer_label": None,
+        }
+        meta["review_v1"] = True
+        meta.pop("approval", None)
+        _write_meta(job_id, meta, connection=connection)
+        return _review_identity(_review_view(record, meta))
+
+
+class TypedContractRequest(BaseModel):
+    contract: dict[str, Any]
+
+
+@app.post("/api/jobs/{job_id}/typed-contract")
+def attach_typed_contract(job_id: str, body: TypedContractRequest) -> dict[str, Any]:
+    """Attach the analyst-supplied canonical contract to a draft job."""
+    record = _job_or_404(job_id)
+    try:
+        typed = SecurityContract.from_dict(body.contract)
+    except (TypeError, ValueError) as exc:
+        raise _review_error(422, "invalid_input", f"Invalid typed contract: {exc}") from exc
+    with _job_write() as connection:
+        _require_idle(connection, job_id)
+        state = connection.execute("SELECT phase FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if state is None or state["phase"] not in {"draft", "awaiting_review"}:
+            raise _review_error(
+                409, "invalid_transition", "A typed contract can only be attached before a run.",
+            )
+        meta = _read_meta(job_id, connection=connection)
+        approval = meta.get("approval")
+        if isinstance(approval, dict) and approval.get("review_binding_digest"):
+            raise _review_error(
+                409, "invalid_transition", "An approved job cannot change its typed contract.",
+            )
+        current = _review_view(record, meta)
+        if current["revision"] != 1:
+            raise _review_error(
+                409, "invalid_transition",
+                "Attach the typed contract before editing the review.",
+            )
+        meta[TYPED_CONTRACT_KEY] = typed.canonical_json()
+        meta[TYPED_CONTRACT_SHA_KEY] = typed.sha256()
+        seeded = _contract_from_typed(typed)
+        # A legacy approval may already hold the current revision in the
+        # contracts table; the new review supersedes it without overwriting the
+        # historical row, so the canonical contract needs the next revision.
+        persisted = connection.execute(
+            "SELECT 1 FROM contracts WHERE job_id = ? AND revision = ?",
+            (job_id, current["revision"]),
+        ).fetchone()
+        if persisted is not None:
+            seeded["revision"] = current["revision"] + 1
+        meta["contract"] = seeded
+        meta["review_v1"] = True
+        meta.pop("approval", None)
+        _write_meta(job_id, meta, connection=connection)
+        return _review_identity(_review_view(record, meta))
+
+
+class ReviewApprovalRequest(ReviewedStartRequest):
+    reviewer_label: str = Field(min_length=1, max_length=128)
+
+
+@app.post("/api/jobs/{job_id}/reviewed-approve")
+def approve_review(job_id: str, body: ReviewApprovalRequest) -> dict[str, Any]:
+    record = _job_or_404(job_id)
+    with _job_write() as connection:
+        _require_idle(connection, job_id)
+        meta = _read_meta(job_id, connection=connection)
+        current = _review_view(record, meta)
+        if not api_v1.binding_complete(current["review_binding"]):
+            raise _review_error(409, "invalid_transition", "The review binding is incomplete.")
+        digest = current["review_binding_digest"]
+        if body.expected_sha256 != digest:
+            raise _review_error(
+                409, "stale_approval", "The review binding changed since this page loaded.",
+                current=_review_identity(current),
+            )
+        reviewer = body.reviewer_label.strip()
+        if not reviewer or not reviewer.isascii():
+            raise _review_error(422, "invalid_input", "Reviewer label must be nonempty ASCII text.")
+        typed = _typed_contract(meta)
+        if typed is None:
+            raise _review_error(409, "invalid_transition", REVIEW_SCOPE_MISSING)
+        try:
+            canonical = _canonical_review_contract(typed, meta.get("contract") or _contract_body())
+        except (TypeError, ValueError) as exc:
+            raise _review_error(
+                422, "invalid_input", f"The reviewed text cannot form a canonical contract: {exc}",
+            ) from exc
+        canonical_sha = canonical.sha256()
+        try:
+            jobs.approve_contract(
+                job_id, contract_revision=current["revision"], reviewer_label=reviewer,
+                data_dir=_data_dir(), input_sha256=record.original_sha256,
+                manifest_sha256=meta["manifest_sha256"],
+                contract_body=canonical.to_dict(),
+                connection=connection,
+            )
+        except ValueError as exc:
+            raise _review_error(409, "invalid_transition", "The current revision could not be approved.") from exc
+        approved_at = _now()
+        stored = dict(meta.get("contract") or _contract_body())
+        stored.update(approved=True, approved_at=approved_at, reviewer_label=reviewer)
+        meta["contract"] = stored
+        meta["review_v1"] = True
+        meta["approval"] = {
+            "revision": current["revision"],
+            "sha256": current["sha256"],
+            "review_binding_digest": digest,
+            "reviewer_label": reviewer,
+            "approved_at": approved_at,
+            TYPED_CONTRACT_SHA_KEY: typed.sha256(),
+            "canonical_contract_sha256": canonical_sha,
+        }
+        _write_meta(job_id, meta, connection=connection)
+        return {
+            "approved": True,
+            "sha256": current["sha256"],
+            "review_binding_digest": digest,
+            "approved_at": approved_at,
+            TYPED_CONTRACT_SHA_KEY: typed.sha256(),
+            "canonical_contract_sha256": canonical_sha,
+        }
+
+
 @app.post("/api/jobs/{job_id}/contract")
 def update_contract(
     job_id: str,
@@ -1049,37 +1563,41 @@ def update_contract(
     assumptions: str = Form(""),
 ) -> dict[str, Any]:
     _job_or_404(job_id)
-    meta = _read_meta(job_id)
-    contract = dict(meta.get("contract") or _contract_body())
-    current = int(contract.get("revision", 1))
-    if expected_revision != current:
-        raise HTTPException(status_code=409, detail="Stale contract revision.")
-
-    updated = _contract_body(
-        valid_domain=valid_domain,
-        forbidden=forbidden,
-        invalid_outcome=invalid_outcome,
-        assumptions=assumptions,
-    )
-    updated["revision"] = current + 1
-    updated["approved"] = False
-    updated["approved_at"] = None
-    updated["reviewer_label"] = None
-    meta["contract"] = updated
-    meta.pop("approval", None)
-    _write_meta(job_id, meta)
-    return {"id": job_id, "contract": updated}
+    with _job_write() as connection:
+        _require_idle(connection, job_id)
+        meta = _read_meta(job_id, connection=connection)
+        contract = meta.get("contract") or _contract_body()
+        current = int(contract.get("revision", 1))
+        if expected_revision != current:
+            raise HTTPException(status_code=409, detail="Stale contract revision.")
+        updated = _contract_body(
+            valid_domain=valid_domain, forbidden=forbidden,
+            invalid_outcome=invalid_outcome, assumptions=assumptions,
+        )
+        updated["revision"] = current + 1
+        meta["contract"] = updated
+        meta.pop("approval", None)
+        _write_meta(job_id, meta, connection=connection)
+        return {"id": job_id, "contract": updated}
 
 
 @app.post("/api/jobs/{job_id}/approve")
 async def approve(job_id: str, request: Request) -> dict[str, Any]:
     record = _job_or_404(job_id)
-    meta = _read_meta(job_id)
     content_type = (request.headers.get("content-type") or "").lower()
+    body = ApproveRequest.model_validate(await request.json()) if "application/json" in content_type else None
+    form = await request.form() if body is None else None
+    with _job_write() as connection:
+        _require_idle(connection, job_id)
+        meta = _read_meta(job_id, connection=connection)
+        if meta.get("review_v1"):
+            raise HTTPException(409, detail="Review and approve this job through the v1 interface.")
+        return _legacy_approval(record, meta, body, form, connection)
 
-    if "application/json" in content_type:
-        raw = await request.json()
-        body = ApproveRequest.model_validate(raw)
+
+def _legacy_approval(record, meta, body, form, connection) -> dict[str, Any]:
+    job_id = record.id
+    if body is not None:
         try:
             approval = jobs.approve_contract(
                 job_id,
@@ -1089,6 +1607,7 @@ async def approve(job_id: str, request: Request) -> dict[str, Any]:
                 contract_body=body.contract,
                 input_sha256=record.original_sha256,
                 manifest_sha256=body.manifest_sha256,
+                connection=connection,
             )
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1105,7 +1624,6 @@ async def approve(job_id: str, request: Request) -> dict[str, Any]:
         meta["contract"] = contract
         meta["manifest_sha256"] = body.manifest_sha256
     else:
-        form = await request.form()
         expected = str(form.get("expected_sha256", ""))
         reviewer = str(form.get("reviewer_label", ""))
         contract = dict(meta.get("contract") or _contract_body())
@@ -1124,6 +1642,7 @@ async def approve(job_id: str, request: Request) -> dict[str, Any]:
                 input_sha256=record.original_sha256,
                 manifest_sha256=manifest,
                 scope_sha256=str(contract.get("sha256") or ""),
+                connection=connection,
             )
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1142,7 +1661,7 @@ async def approve(job_id: str, request: Request) -> dict[str, Any]:
         "reviewer_label": str(meta["contract"].get("reviewer_label") or ""),
         "approved_at": str(meta["contract"].get("approved_at") or ""),
     }
-    _write_meta(job_id, meta)
+    _write_meta(job_id, meta, connection=connection)
     return {
         "contract_id": approval.contract_id,
         "contract_revision": approval.contract_revision,
@@ -1158,30 +1677,29 @@ async def approve(job_id: str, request: Request) -> dict[str, Any]:
 @app.post("/api/jobs/{job_id}/runs")
 def start_canonical(job_id: str, body: RunRequest) -> JSONResponse:
     record = _job_or_404(job_id)
-    if record.phase == "cancelled":
-        raise HTTPException(status_code=409, detail="Job is cancelled; a new job is required.")
-    contract = jobs.get_contract(job_id, body.contract_revision, data_dir=_data_dir())
-    if contract is None:
-        raise HTTPException(status_code=409, detail="No approval for this contract revision.")
+
+    def approved_inputs(connection):
+        meta = _read_meta(job_id, connection=connection)
+        if meta.get("review_v1"):
+            approval = _saved_approval(record, meta, connection)
+            if approval.contract_revision != body.contract_revision or approval.manifest_sha256 != body.manifest_sha256:
+                raise HTTPException(409, detail="Run inputs do not match the current approval.")
+            return approval
+        state = connection.execute("SELECT phase FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if state["phase"] == "cancelled":
+            raise HTTPException(409, detail="Job is cancelled; a new job is required.")
+        row = connection.execute(
+            "SELECT * FROM contracts WHERE job_id = ? AND revision = ?",
+            (job_id, body.contract_revision),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(409, detail="No approval for this contract revision.")
+        return jobs.approval_from_contract(row, manifest_sha256=body.manifest_sha256)
+
     try:
-        approval = jobs.approval_from_contract(
-            contract, manifest_sha256=body.manifest_sha256
-        )
-        approval = jobs.Approval(
-            job_id=approval.job_id,
-            contract_id=approval.contract_id,
-            contract_revision=approval.contract_revision,
-            input_sha256=record.original_sha256,
-            manifest_sha256=approval.manifest_sha256,
-            scope_sha256=approval.scope_sha256,
-            reviewer_label=approval.reviewer_label,
-            approved_at=approval.approved_at,
-        )
         run = jobs.start_run(
-            job_id,
-            approval=approval,
-            idempotency_key=body.idempotency_key,
-            data_dir=_data_dir(),
+            job_id, approval=None, idempotency_key=body.idempotency_key, data_dir=_data_dir(),
+            approval_for_start=approved_inputs,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1571,8 +2089,11 @@ def job_artifact(job_id: str, artifact_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/jobs/{job_id}/artifacts/{artifact_id}/download")
-def download_job_artifact(job_id: str, artifact_id: str) -> FileResponse:
-    return _verified_artifact_response(job_id, artifact_id)
+def download_job_artifact(request: Request, job_id: str, artifact_id: str) -> FileResponse:
+    return _verified_artifact_response(
+        job_id, artifact_id,
+        include_digest=request.headers.get(api_v1.VERSION_HEADER) == api_v1.CONTRACT_VERSION,
+    )
 
 
 @app.get("/api/jobs/{job_id}/analysis")
@@ -1599,25 +2120,18 @@ def request_analysis(job_id: str) -> JSONResponse:
     if record.phase == "cancelled":
         raise HTTPException(status_code=409, detail="A cancelled job cannot be screened.")
 
-    meta = _read_meta(job_id)
-    contract = meta.get("contract") or {}
-    approved = bool(meta.get("approval")) or bool(contract.get("approved"))
-    if not approved:
-        raise HTTPException(
-            status_code=409,
-            detail="Approve the repair contract before screening the original.",
-        )
-    if jobs.latest_run(record.id, data_dir=_data_dir()) is not None:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "A repair run already exists for this job; request screening before "
-                "starting the run."
-            ),
-        )
-
-    meta["analysis"] = {"status": "requested", "requested_at": _now()}
-    _write_meta(job_id, meta)
+    with _job_write() as connection:
+        meta = _read_meta(job_id, connection=connection)
+        contract = meta.get("contract") or {}
+        approved = bool(meta.get("approval")) or bool(contract.get("approved"))
+        if meta.get("review_v1"):
+            approved = _review_view(record, meta)["approved"]
+        if not approved:
+            raise HTTPException(409, detail="Approve the repair contract before screening the original.")
+        if connection.execute("SELECT 1 FROM runs WHERE job_id = ? LIMIT 1", (job_id,)).fetchone():
+            raise HTTPException(409, detail="A repair run already exists for this job.")
+        meta["analysis"] = {"status": "requested", "requested_at": _now()}
+        _write_meta(job_id, meta, connection=connection)
     return JSONResponse(_analysis_payload(job_id, record), status_code=202)
 
 
@@ -1869,8 +2383,11 @@ def get_artifact(artifact_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/artifacts/{artifact_id}/download")
-def download_artifact(artifact_id: str) -> FileResponse:
+def download_artifact(request: Request, artifact_id: str) -> FileResponse:
     row = jobs.get_artifact(artifact_id, data_dir=_data_dir())
     if row is None:
         raise HTTPException(status_code=404, detail="Artifact not found.")
-    return _verified_artifact_response(str(row.get("job_id") or ""), artifact_id)
+    return _verified_artifact_response(
+        str(row.get("job_id") or ""), artifact_id,
+        include_digest=request.headers.get(api_v1.VERSION_HEADER) == api_v1.CONTRACT_VERSION,
+    )

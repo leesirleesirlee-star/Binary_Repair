@@ -148,11 +148,12 @@ function approval(item, ctx) {
         ? control(t('reviewAgain'), () => engine.reopen(chat)) : null);
   }
 
-  const form = el('form', {class: 'approval-edit', hidden: true, onsubmit: event => {
+  const form = el('form', {class: 'approval-edit', hidden: chat.reviewDraft == null, onsubmit: event => {
     event.preventDefault();
     engine.decide(chat, p.request_id, 'edit', event.currentTarget.elements.scope.value);
   }},
-  el('label', {}, t('field'), el('textarea', {name: 'scope', value: scope, required: true, maxlength: '1000'})),
+  el('label', {}, t('field'), el('textarea', {name: 'scope', value: chat.reviewDraft ?? scope, required: true, maxlength: '1000',
+    oninput: event => { chat.reviewDraft = event.currentTarget.value; }})),
   control(t('saveReview'), null, {type: 'submit', tone: 'primary'}));
   const reviewer = el('input', {name: 'reviewer', class: 'reviewer-input', placeholder: t('reviewer'),
     autocomplete: 'off', value: chat.reviewer ?? ''});

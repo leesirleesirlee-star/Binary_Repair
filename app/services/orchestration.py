@@ -197,16 +197,21 @@ def evaluate_attempt(
         ],
         "verdict": _verdict_payload(verdict),
     }
-    if attempt_id is None and route is None:
-        _write_json(
-            Path(data_dir) / "jobs" / job_id / "runs" / run_id / "verdict.json",
-            payload,
-        )
-
     outcome, reason, failing, detail = _verdict_values(verdict)
     connection = connect(data_dir)
     try:
         with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            state = connection.execute(
+                "SELECT phase FROM runs WHERE id = ? AND job_id = ?", (run_id, job_id),
+            ).fetchone()
+            if state is None or state["phase"] in {"finished", "cancelled", "cancelling"}:
+                return verdict
+            if attempt_id is None and route is None:
+                _write_json(
+                    Path(data_dir) / "jobs" / job_id / "runs" / run_id / "verdict.json",
+                    payload,
+                )
             attempt = _select_attempt(
                 connection,
                 run_id=run_id,
@@ -246,35 +251,30 @@ def evaluate_run(
     from app.domain.acceptance import decide_run_outcome
 
     verdict = decide_run_outcome(route_a=route_a, route_b=route_b)
-    _write_json(
-        Path(data_dir) / "jobs" / job_id / "run-verdict.json",
-        {
-            "job_id": job_id,
-            "route_a": _verdict_payload(route_a),
-            "route_b": _verdict_payload(route_b),
-            "verdict": _verdict_payload(verdict),
-        },
-    )
     outcome, reason, failing, detail = _verdict_values(verdict)
     connection = connect(data_dir)
     try:
         with connection:
-            if run_id is not None:
-                connection.execute(
-                    "UPDATE runs SET phase = 'finished', outcome = ?, reason = ?, "
-                    "failing_obligation = ?, detail = ?, finished_at = ? "
-                    "WHERE id = ? AND job_id = ?",
-                    (outcome, reason, failing, detail, _now(), run_id, job_id),
-                )
-            else:
-                connection.execute(
-                    "UPDATE runs SET phase = 'finished', outcome = ?, reason = ?, "
-                    "failing_obligation = ?, detail = ?, finished_at = ? "
-                    "WHERE id = (SELECT id FROM runs WHERE job_id = ? "
-                    "ORDER BY started_at DESC, rowid DESC LIMIT 1) AND job_id = ?",
-                    (outcome, reason, failing, detail, _now(), job_id, job_id),
-                )
+            accepted = connection.execute(
+                "UPDATE runs SET phase = 'finished', outcome = ?, reason = ?, "
+                "failing_obligation = ?, detail = ?, finished_at = ? "
+                "WHERE id = (SELECT id FROM runs WHERE job_id = ? "
+                "ORDER BY started_at DESC, rowid DESC LIMIT 1) "
+                "AND (? IS NULL OR id = ?) AND phase NOT IN ('finished', 'cancelled', 'cancelling')",
+                (outcome, reason, failing, detail, _now(), job_id, run_id, run_id),
+            )
+            if accepted.rowcount != 1:
+                return verdict
             connection.execute("UPDATE jobs SET phase = 'finished' WHERE id = ?", (job_id,))
+            _write_json(
+                Path(data_dir) / "jobs" / job_id / "run-verdict.json",
+                {
+                    "job_id": job_id,
+                    "route_a": _verdict_payload(route_a),
+                    "route_b": _verdict_payload(route_b),
+                    "verdict": _verdict_payload(verdict),
+                },
+            )
     finally:
         connection.close()
     return verdict

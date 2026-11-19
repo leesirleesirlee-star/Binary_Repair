@@ -12,6 +12,7 @@ const copy = {
   eventCount: [count => count === 1 ? '1 event' : count + ' events', count => count + ' 个事件'],
   executionOverview: ['Run overview', '运行概览'], verifyActivity: ['Verification', '验证'],
   scopePending: ['Approve a contract to define the repair scope.', '批准契约后确定修复范围。'],
+  staleReview: ['The saved contract changed. Review the latest version and your unsaved edit before saving again.', '已保存的契约发生变化。请核对最新版本和未保存的编辑，再决定是否保存。'],
   routeNoReason: ['No route note recorded.', '暂无路线说明。'],
   routeAManifestReason: ['The sample checks the Route A evidence manifest first.', '此示例先检查路线 A 的证据清单。'],
   routeAUnavailable: ['The Route A evidence manifest was unavailable.', '路线 A 的证据清单不可用。'],

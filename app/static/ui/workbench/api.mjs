@@ -44,7 +44,7 @@ function session() {
   return sessionPromise;
 }
 
-async function request(path, {method = 'GET', body, headers = {}, retry = true} = {}) {
+async function request(path, {method = 'GET', body, headers = {}, retry = true, attachment = false} = {}) {
   const token = method === 'GET' ? null : await session();
   const init = {
     method,
@@ -64,7 +64,7 @@ async function request(path, {method = 'GET', body, headers = {}, retry = true} 
   try {
     response = await fetch(path, init);
   } catch (error) {
-    if (method !== 'GET' && retry) return request(path, {method, body, headers, retry: false});
+    if (method !== 'GET' && retry) return request(path, {method, body, headers, retry: false, attachment});
     throw Object.assign(new Error('Network unavailable.'), {status: 0, cause: error});
   }
   if (response.status === 401) sessionPromise = null;
@@ -74,7 +74,7 @@ async function request(path, {method = 'GET', body, headers = {}, retry = true} 
       code: 'unsupported_contract_version',
     });
   }
-  return parse(response);
+  return attachment && response.ok ? response : parse(response);
 }
 
 const query = (params) => {
@@ -88,7 +88,31 @@ const query = (params) => {
 
 const json = value => JSON.stringify(value);
 const jobPath = id => '/api/jobs/' + encodeURIComponent(id);
-export const artifactUrl = id => '/api/artifacts/' + encodeURIComponent(id) + '/download';
+const pendingStarts = new Map();
+
+async function start(id, digest) {
+  let pending = pendingStarts.get(id);
+  if (pending?.digest !== digest) {
+    pending = {digest, key: crypto.randomUUID()};
+    pendingStarts.set(id, pending);
+  }
+  const clear = () => {
+    if (pendingStarts.get(id) === pending) pendingStarts.delete(id);
+  };
+  try {
+    const reply = await request(jobPath(id) + '/start', {
+      method: 'POST',
+      headers: {'Idempotency-Key': pending.key},
+      body: json({expected_sha256: pending.digest}),
+    });
+    clear();
+    return reply;
+  } catch (error) {
+    if ([400, 404, 409, 422].includes(error.status) && error.code) clear();
+    throw error;
+  }
+}
+
 export const reportUrl = (id, runId) => jobPath(id) + '/export' + query({run_id: runId});
 
 export const live = {
@@ -104,6 +128,21 @@ export const live = {
   artifacts: async id => {
     const data = await request(jobPath(id) + '/artifacts');
     return Array.isArray(data.artifacts) ? data.artifacts : [];
+  },
+  downloadArtifact: async (jobId, artifactId) => {
+    const path = jobPath(jobId) + '/artifacts/' + encodeURIComponent(artifactId) + '/download';
+    const response = await request(path, {
+      attachment: true,
+      headers: {Accept: 'application/octet-stream'},
+    });
+    const disposition = response.headers.get('content-disposition') || '';
+    const filename = /^attachment;\s*filename="([A-Za-z0-9._-]+)"$/i.exec(disposition)?.[1];
+    if (response.status !== 200 || !filename || filename === '.' || filename === '..') {
+      throw Object.assign(new Error('The server did not return a valid attachment.'), {
+        status: 409, code: 'artifact_unavailable',
+      });
+    }
+    return {file: await response.blob(), filename};
   },
   comparison: (id, runId) => request(jobPath(id) + '/comparison' + query({run_id: runId})),
   provider: async () => {
@@ -125,11 +164,7 @@ export const live = {
     method: 'POST',
     body: json({expected_sha256: digest, reviewer_label: reviewer}),
   }),
-  start: (id, digest) => request(jobPath(id) + '/start', {
-    method: 'POST',
-    headers: {'Idempotency-Key': crypto.randomUUID()},
-    body: json({expected_sha256: digest}),
-  }),
+  start,
   cancel: (id, runId) => request(jobPath(id) + '/cancel', {
     method: 'POST',
     body: json({run_id: runId}),

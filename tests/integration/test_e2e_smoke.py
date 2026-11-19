@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from app.controller_api import app
 from app.services import worker
+from tests.support_typed_contract import sample_typed_contract
 
 FORM = {
     "defect": "smoke: wiring only",
@@ -38,10 +39,17 @@ def test_controller_worker_snapshot_smoke(tmp_path: Path, monkeypatch) -> None:
     assert created.status_code == 201, created.text
     job_id = created.json()["id"]
 
-    contract = client.get(f"/api/jobs/{job_id}").json()["contract"]
+    # The executor needs a reviewed canonical scope; the legacy identity
+    # placeholder must never authorize execution.
+    manifest = "1" * 64
     approved = client.post(
         f"/api/jobs/{job_id}/approve",
-        data={"expected_sha256": contract["sha256"], "reviewer_label": "smoke"},
+        json={
+            "contract": sample_typed_contract(),
+            "contract_revision": 1,
+            "manifest_sha256": manifest,
+            "reviewer_label": "smoke",
+        },
     )
     assert approved.status_code == 200, approved.text
 
@@ -49,7 +57,7 @@ def test_controller_worker_snapshot_smoke(tmp_path: Path, monkeypatch) -> None:
         f"/api/jobs/{job_id}/runs",
         json={
             "contract_revision": 1,
-            "manifest_sha256": "1" * 64,
+            "manifest_sha256": manifest,
             "idempotency_key": "smoke-1",
         },
     )

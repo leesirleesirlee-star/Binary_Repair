@@ -102,6 +102,7 @@ class ReasonCode(str, Enum):
     TOOL_FAILED = "tool_failed"
     PROVIDER_FAILED = "provider_failed"
     TERMINATION_UNCONFIRMED = "termination_unconfirmed"
+    UNBOUND_REVIEW_SCOPE = "unbound_review_scope"
 
 
 #: Outcomes that can never be displayed as success. Exposed so the UI tests can

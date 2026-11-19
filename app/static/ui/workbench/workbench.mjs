@@ -63,7 +63,7 @@ function errorKey(error) {
     invalid_input: 'invalidInput',
     unsupported_contract_version: 'unavailable',
     capability_unavailable: 'unavailable',
-    artifact_unavailable: 'unavailable',
+    artifact_unavailable: 'artifactUnavailable',
   };
   return byCode[error?.code] ?? ({
     401: 'session', 403: 'permission', 404: 'taskMissing', 409: 'conflict',

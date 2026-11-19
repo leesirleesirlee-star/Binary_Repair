@@ -11,8 +11,10 @@ import json
 import os
 import re
 from datetime import datetime, timezone
+from email.message import Message
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import quote
 
 import httpx
 
@@ -247,10 +249,13 @@ def _has_cjk_in_payload(payload: Any) -> bool:
 class BackendError(RuntimeError):
     """Raised when a backend data source cannot fulfil a request."""
 
-    def __init__(self, status_code: int, detail: str) -> None:
+    def __init__(self, status_code: int, detail: str, *, code: str | None = None,
+                 current: dict[str, Any] | None = None) -> None:
         super().__init__(detail)
         self.status_code = status_code
         self.detail = detail
+        self.code = code
+        self.current = current
 
 
 class Backend(Protocol):
@@ -450,7 +455,9 @@ class HttpBackend:
                 timeout = float(os.environ.get(API_TIMEOUT_ENV, DEFAULT_TIMEOUT_SECONDS))
             except ValueError:
                 timeout = DEFAULT_TIMEOUT_SECONDS
-        self._client = httpx.Client(base_url=self.base_url, timeout=timeout, transport=transport)
+        self._client = httpx.Client(
+            base_url=self.base_url, timeout=timeout, transport=transport, trust_env=False,
+        )
 
     def close(self) -> None:
         self._client.close()
@@ -482,10 +489,17 @@ class HttpBackend:
                 payload = response.json()
             except ValueError:
                 payload = None
+            if isinstance(payload, dict) and isinstance(payload.get("detail"), dict):
+                payload = payload["detail"]
             if isinstance(payload, dict) and isinstance(payload.get("detail"), str):
                 detail = payload["detail"]
             status = response.status_code if response.status_code in (400, 404, 409, 422) else 502
-            raise BackendError(status, detail)
+            code = payload.get("code") if isinstance(payload, dict) else None
+            current = payload.get("current") if isinstance(payload, dict) else None
+            raise BackendError(
+                status, detail, code=code if isinstance(code, str) else None,
+                current=current if isinstance(current, dict) else None,
+            )
 
         if response.status_code == 204 or not response.content:
             return None
@@ -494,21 +508,25 @@ class HttpBackend:
 
     def create_job(self, *, binary_bytes: bytes, filename: str, defect: str, valid_tests: str,
                    environment: str, valid_domain: str, forbidden: str, invalid_outcome: str,
-                   assumptions: str) -> str:
+                   assumptions: str, review_v1: bool = False, contract: str = "") -> str:
+        form = {
+            "defect": defect,
+            "valid_tests": valid_tests,
+            "environment": environment,
+            "valid_domain": valid_domain,
+            "forbidden": forbidden,
+            "invalid_outcome": invalid_outcome,
+            "assumptions": assumptions,
+        }
+        if contract:
+            form["contract"] = contract
         payload = self._request(
             "POST",
             "/api/jobs",
             where="create_job",
+            headers={"X-BinaryRepair-Contract-Version": "1"} if review_v1 else None,
             files={"binary": (filename, binary_bytes, "application/octet-stream")},
-            data={
-                "defect": defect,
-                "valid_tests": valid_tests,
-                "environment": environment,
-                "valid_domain": valid_domain,
-                "forbidden": forbidden,
-                "invalid_outcome": invalid_outcome,
-                "assumptions": assumptions,
-            },
+            data=form,
         )
         job_id = payload.get("id") if isinstance(payload, dict) else None
         if not isinstance(job_id, str) or not job_id:
@@ -516,7 +534,16 @@ class HttpBackend:
         return job_id
 
     def get_snapshot(self, job_id: str) -> dict[str, Any]:
-        payload = self._request("GET", f"/api/jobs/{job_id}", where="get_snapshot")
+        return self._get_snapshot(job_id, review_v1=False)
+
+    def get_review_snapshot(self, job_id: str) -> dict[str, Any]:
+        return self._get_snapshot(job_id, review_v1=True)
+
+    def _get_snapshot(self, job_id: str, *, review_v1: bool) -> dict[str, Any]:
+        payload = self._request(
+            "GET", f"/api/jobs/{job_id}", where="get_snapshot",
+            headers={"X-BinaryRepair-Contract-Version": "1"} if review_v1 else None,
+        )
         if not isinstance(payload, dict) or "phase" not in payload or "routes" not in payload:
             raise BackendError(502, "Backend snapshot is missing required fields (phase, routes).")
         return payload
@@ -539,6 +566,36 @@ class HttpBackend:
 
     def cancel(self, job_id: str) -> None:
         self._request("POST", f"/api/jobs/{job_id}/cancel", where="cancel")
+
+    def attach_typed_contract(self, job_id: str, contract: dict[str, Any]) -> dict[str, Any]:
+        return self._request(
+            "POST", f"/api/jobs/{job_id}/typed-contract", where="attach typed contract",
+            json={"contract": contract},
+        )
+
+    def start_reviewed(self, job_id: str, key: str, expected_sha256: str) -> dict[str, Any]:
+        return self._request(
+            "POST", f"/api/jobs/{job_id}/reviewed-start", where="reviewed start",
+            headers={"Idempotency-Key": key}, json={"expected_sha256": expected_sha256},
+        )
+
+    def edit_review(self, job_id: str, revision: int, fields: dict[str, str]) -> dict[str, Any]:
+        return self._request(
+            "POST", f"/api/jobs/{job_id}/reviewed-contract", where="edit review",
+            json={"expected_revision": revision, **fields},
+        )
+
+    def approve_review(self, job_id: str, digest: str, reviewer: str) -> dict[str, Any]:
+        return self._request(
+            "POST", f"/api/jobs/{job_id}/reviewed-approve", where="approve review",
+            json={"expected_sha256": digest, "reviewer_label": reviewer},
+        )
+
+    def cancel_run(self, job_id: str, run_id: str) -> dict[str, Any]:
+        return self._request(
+            "POST", f"/api/jobs/{job_id}/cancel-run", where="cancel run",
+            json={"run_id": run_id},
+        )
 
     def get_comparison(self, job_id: str) -> dict[str, Any] | None:
         payload = self._request("GET", f"/api/jobs/{job_id}/comparison", where="get_comparison")
@@ -737,20 +794,47 @@ class HttpBackend:
         JSON/language checks. A 404 means the bytes are not available, which the
         caller must surface as a missing download instead of an empty file.
         """
+        return self._fetch_artifact_bytes(artifact_id, f"/api/artifacts/{artifact_id}/download")
+
+    def get_verified_artifact_bytes(
+        self, artifact_id: str, *, job_id: str | None = None,
+    ) -> tuple[bytes, str, str]:
+        """Check the exact bytes that will be sent to a versioned browser."""
+        if artifact_id in {"", ".", ".."} or job_id in {"", ".", ".."}:
+            raise BackendError(404, "Artifact not found.")
+        prefix = "/api" if job_id is None else f"/api/jobs/{quote(job_id, safe='')}"
+        path = f"{prefix}/artifacts/{quote(artifact_id, safe='')}/download"
+        return self._fetch_artifact_bytes(artifact_id, path, verify=True)
+
+    def _fetch_artifact_bytes(
+        self, artifact_id: str, path: str, *, verify: bool = False,
+    ) -> tuple[bytes, str, str]:
+        headers = {"X-BinaryRepair-Contract-Version": "1"} if verify else None
         try:
-            response = self._client.get(f"/api/artifacts/{artifact_id}/download")
+            response = self._client.get(path, headers=headers)
         except httpx.HTTPError as exc:
             raise BackendError(
                 502, f"Backend unavailable at {self.base_url}: {exc.__class__.__name__}."
             ) from exc
         if response.status_code == 404:
             raise BackendError(404, "Artifact content is unavailable at the controller.")
+        if verify and response.status_code == 409:
+            raise BackendError(409, "The registered artifact is unavailable or failed integrity checks.")
         if response.status_code >= 400:
             raise BackendError(
                 502, f"Backend artifact download failed ({response.status_code})."
             )
         media_type = response.headers.get("content-type") or "application/octet-stream"
         disposition = response.headers.get("content-disposition") or ""
+        if verify:
+            digest = response.headers.get("x-binaryrepair-artifact-sha256", "")
+            if response.status_code != 200 or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+                raise BackendError(503, "The controller did not supply a verified artifact digest.")
+            if hashlib.sha256(response.content).hexdigest() != digest:
+                raise BackendError(409, "The received artifact bytes do not match their registered hash.")
+            metadata = Message()
+            metadata["Content-Disposition"] = disposition
+            return response.content, media_type, metadata.get_filename() or f"{artifact_id}.bin"
         match = re.search(r'filename="?([^";]+)"?', disposition)
         filename = match.group(1) if match else f"{artifact_id}.bin"
         return response.content, media_type, filename

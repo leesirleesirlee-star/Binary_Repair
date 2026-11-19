@@ -8,6 +8,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.controller_api import app
+from app.domain.acceptance import Verdict
+from app.domain.outcomes import Outcome, ReasonCode
+from app.services import orchestration
 
 FORM = {
     "defect": "strcpy in stack_buf does not check length; overlong input writes out of bounds",
@@ -113,7 +116,7 @@ def test_contract_edit_invalidates_approval(client: TestClient) -> None:
     assert stale_hash.status_code == 409
 
 
-def test_same_key_with_new_contract_returns_409(client: TestClient) -> None:
+def test_same_key_with_new_contract_returns_409(client: TestClient, tmp_path) -> None:
     job_id = _create(client)["id"]
     _approve_current(client, job_id)
     first = client.post(
@@ -125,6 +128,17 @@ def test_same_key_with_new_contract_returns_409(client: TestClient) -> None:
         },
     )
     assert first.status_code == 202, first.text
+
+    blocked = client.post(
+        f"/api/jobs/{job_id}/contract",
+        data={"expected_revision": 1, "valid_domain": "revised contract"},
+    )
+    assert blocked.status_code == 409
+    verdict = Verdict(Outcome.INCONCLUSIVE, ReasonCode.REQUIRED_CHECK_NOT_RUN)
+    orchestration.evaluate_run(
+        job_id, run_id=first.json()["id"], route_a=verdict, route_b=verdict,
+        data_dir=tmp_path / "var",
+    )
 
     updated = client.post(
         f"/api/jobs/{job_id}/contract",

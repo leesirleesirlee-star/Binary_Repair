@@ -420,6 +420,7 @@ export function chatLive({notify = () => {}} = {}) {
       if (!data || chat.epoch !== epoch) return;
       clearError(chat);
       sync(chat, data.snapshot, data);
+      return true;
     } catch (error) {
       if (!silent) fail(chat, error);
     }
@@ -595,12 +596,19 @@ export function chatLive({notify = () => {}} = {}) {
       try {
         await live.save(chat.jobId, fields, contract.revision);
         if (chat.epoch !== epoch) return;
+        chat.reviewDraft = null;
         event(chat, 'user_response', {
           kind: 'decision', request_id: requestId, decision: 'edit', binding,
         }, 'contract');
         await refresh(chat);
         say(chat, label(locale, 'savedLive'));
       } catch (error) {
+        if (error?.code === 'stale_revision' && chat.epoch === epoch) {
+          chat.reviewDraft ??= fields.valid_domain;
+          const refreshed = await refresh(chat);
+          if (refreshed && chat.epoch === epoch) say(chat, label(locale, 'staleReview'));
+          return;
+        }
         fail(chat, error);
       }
     }
