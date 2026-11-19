@@ -10,6 +10,7 @@ from app.main import CSRF_TOKEN, SESSION_TOKEN, app
 client = TestClient(app, base_url="http://127.0.0.1")
 client.get("/?token=" + SESSION_TOKEN)
 HEADERS = {"X-CSRF-Token": CSRF_TOKEN}
+V1_HEADERS = {**HEADERS, "X-BinaryRepair-Contract-Version": "1"}
 
 
 def _clean_env(monkeypatch, tmp_path: Path) -> None:
@@ -46,6 +47,17 @@ def test_key_endpoints_require_csrf(tmp_path: Path, monkeypatch) -> None:
     response = client.post("/api/assistant/key", json={"key": "sk-csrf-0123456789"})
     assert response.status_code == 403
     assert "sk-csrf" not in response.text
+
+
+def test_conversation_key_save_returns_only_configuration_status(tmp_path: Path, monkeypatch) -> None:
+    _clean_env(monkeypatch, tmp_path)
+    raw_key = "sk-proj-synthetic-key-0123456789"
+    response = client.post("/api/assistant/key", json={"key": raw_key}, headers=V1_HEADERS)
+    assert response.status_code == 200
+    assert response.headers["X-BinaryRepair-Contract-Version"] == "1"
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.json() == {"configured": True}
+    assert client.get("/api/assistant/key", headers=V1_HEADERS).json()["configured"] is True
 
 
 def test_key_test_route_uses_probe(tmp_path: Path, monkeypatch) -> None:

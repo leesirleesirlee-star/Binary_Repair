@@ -1,4 +1,5 @@
 import {el} from '../shared/dom.mjs';
+import {live} from '../workbench/api.mjs';
 import {control, displayTitle} from './chat-view.mjs';
 
 function dialog(title, content, t) {
@@ -47,15 +48,69 @@ export function openSearch({t, engine, select}) {
   input.focus();
 }
 
-export function openModel({t, model, preference}) {
+export function openModel({t, model, preference, preview}) {
   const ids = ['default', 'deepseek-flash', 'deepseek-v4-pro'];
   const select = el('select', {id: 'preferred-model', onchange: event => preference('model', event.currentTarget.value)},
     ids.map(id => el('option', {value: id}, id === 'default' ? t('managedModel') : id)));
   select.value = model;
-  dialog(t('modelConfig'), el('div', {class: 'model-form'},
-    el('div', {}, el('p', {class: 'model-label'}, t('apiKey')),
-      el('output', {class: 'provider-status'}, t('managedKey')),
-      el('p', {class: 'muted model-help'}, t('keySetup'))),
+  const key = el('input', {id: 'model-api-key', type: 'password', required: true,
+    autocomplete: 'off', spellcheck: 'false', autocapitalize: 'none', disabled: preview,
+    'aria-describedby': 'model-key-help'});
+  const save = control(t('keySave'), null, {type: 'submit', tone: 'primary', disabled: true});
+  const status = el('p', {class: 'provider-status', role: 'status'},
+    t(preview ? 'keyPreviewOnly' : 'keyChecking'));
+  const feedback = el('p', {class: 'provider-feedback', role: 'status'});
+  let saving = false;
+  let managed = false;
+  key.addEventListener('input', () => {
+    save.disabled = saving || managed || !key.value.trim();
+    feedback.textContent = '';
+  });
+
+  const form = el('form', {class: 'model-key-form', onsubmit: async event => {
+    event.preventDefault();
+    const value = key.value.trim();
+    if (preview || saving || managed || !value) return;
+    saving = true;
+    key.readOnly = true;
+    save.disabled = true;
+    save.textContent = t('keySaving');
+    feedback.textContent = '';
+    try {
+      await live.saveProviderKey(value);
+      key.value = '';
+      status.textContent = t('keyConfigured');
+      feedback.textContent = t('keySaved');
+    } catch (error) {
+      managed = error.status === 409;
+      if (managed) {
+        key.value = '';
+        key.disabled = true;
+        status.textContent = t('keyManaged');
+      } else {
+        feedback.textContent = t(error.status === 422 ? 'keyInvalid' : 'keySaveFailed');
+      }
+    } finally {
+      saving = false;
+      key.readOnly = false;
+      save.disabled = managed || !key.value.trim();
+      save.textContent = t('keySave');
+    }
+  }},
+  el('label', {for: key.id, class: 'model-label'}, t('apiKey')),
+  key, el('p', {id: 'model-key-help', class: 'muted model-help'}, t('keySetup')),
+  status, save, feedback);
+  const popup = dialog(t('modelConfig'), el('div', {class: 'model-form'}, form,
     el('label', {for: 'preferred-model', class: 'model-label'}, t('modelChoice')),
     select, el('p', {class: 'muted model-help'}, t('previewModel'))), t);
+  popup.addEventListener('close', () => { key.value = ''; });
+  if (!preview) {
+    void live.provider().then(configured => {
+      if (status.textContent === t('keyChecking')) {
+        status.textContent = t(configured === null ? 'keyStatusUnavailable' : configured ? 'keyConfigured' : 'keyMissing');
+      }
+    }).catch(() => {
+      if (status.textContent === t('keyChecking')) status.textContent = t('keyStatusUnavailable');
+    });
+  }
 }

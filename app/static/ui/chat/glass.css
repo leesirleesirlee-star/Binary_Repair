@@ -83,6 +83,11 @@
   .model-help { font-size: .76rem; }
   .provider-status { display: block; color: var(--accent); font-size: .86rem; margin: .22rem 0; }
   .model-form select { width: 100%; padding: .5rem; border-radius: .5rem; border: 1px solid var(--line); background: var(--surface); color: var(--text); }
+  .model-key-form { display: grid; gap: .4rem; padding-bottom: .8rem; border-bottom: 1px solid var(--line); }
+  .model-key-form input { width: 100%; min-width: 0; padding: .55rem; border-radius: .5rem; border: 1px solid var(--line); background: var(--page); }
+  .model-key-form button { justify-self: start; min-height: 2.75rem; }
+  .provider-feedback { margin: 0; font-size: .86rem; }
+  .provider-feedback:empty { display: none; }
   .compact-only { display: none; }
 
   .execution-pane { display: grid; grid-template-rows: auto auto minmax(0, 1fr); min-width: 0; min-height: 0; }

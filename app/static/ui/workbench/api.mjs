@@ -110,6 +110,9 @@ export const live = {
     const data = await request('/api/assistant/key');
     return typeof data.configured === 'boolean' ? data.configured : null;
   },
+  saveProviderKey: key => request('/api/assistant/key', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: json({key}), retry: false,
+  }),
   create: async ({defect, file}) => {
     const form = new FormData();
     form.append('binary', file, file.name);

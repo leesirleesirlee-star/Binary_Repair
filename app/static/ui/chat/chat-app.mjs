@@ -164,7 +164,7 @@ function mount() {
     };
     return {list, mobile, t, newChat: open(newChat), conversation: open(() => nodes.input.focus()), search: open(() => openSearch({t, engine, select})),
       settings: open(() => openSettings({t, locale, theme: getTheme(), preference})),
-      model: open(() => openModel({t, model, preference})),
+      model: open(() => openModel({t, model, preference, preview: previewMode})),
       archive: open(() => { location.href = '/ui/'; }),
       close: () => nodes.navDialog.close()};
   }

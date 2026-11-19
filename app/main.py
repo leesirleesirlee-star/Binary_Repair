@@ -1429,6 +1429,8 @@ async def assistant_key_save(request: Request) -> JSONResponse:
     os.environ.setdefault(ASSISTANT_MODE_ENV, "llm")
     if (os.environ.get(ASSISTANT_MODE_ENV) or "").strip().lower() != "llm":
         os.environ[ASSISTANT_MODE_ENV] = "llm"
+    if api_v1.is_v1(request):
+        return JSONResponse({"configured": True})
     return JSONResponse(
         {
             "saved": saved,
