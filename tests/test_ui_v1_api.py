@@ -67,6 +67,22 @@ def test_write_requires_csrf(client):
     assert response.json()["code"] == "request_forbidden"
 
 
+def test_pending_typed_contract_backend_does_not_drop_create_attachment(client):
+    for contract, status, code in (
+        ("", 422, "invalid_input"),
+        ("{}", 409, "invalid_transition"),
+        (" " * (16 * 1024 + 1), 413, "payload_too_large"),
+    ):
+        response = client.post(
+            "/api/jobs", headers={**V1, "x-csrf-token": "csrf-test"},
+            files={"binary": ("synthetic.elf", b"\x7fELFsynthetic", "application/octet-stream")},
+            data={"defect": "Synthetic typed contract", "contract": contract},
+        )
+        assert response.status_code == status, response.text
+        assert response.json()["code"] == code
+    assert client.get("/api/jobs?limit=50", headers=V1).json()["jobs"] == []
+
+
 def test_welcome_and_both_destinations_are_served(client):
     welcome = client.get("/welcome")
     assert welcome.status_code == 200

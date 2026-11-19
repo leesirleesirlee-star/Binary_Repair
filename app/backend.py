@@ -10,6 +10,8 @@ import hashlib
 import json
 import os
 import re
+from tempfile import TemporaryDirectory
+from threading import RLock
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
@@ -17,6 +19,7 @@ from typing import Any, Protocol
 import httpx
 
 from app import demo, visuals
+from app.services import guided_review
 from app.services import jobs as job_store
 
 BACKEND_ENV = "BINARYREPAIR_BACKEND"
@@ -259,7 +262,9 @@ class Backend(Protocol):
 
     def create_job(self, *, binary_bytes: bytes, filename: str, defect: str, valid_tests: str,
                    environment: str, valid_domain: str, forbidden: str, invalid_outcome: str,
-                   assumptions: str) -> str: ...
+                   assumptions: str, guided_contract: bool = False) -> str: ...
+
+    def change_guided_review(self, job_id: str, action: str, body: dict[str, Any]) -> dict[str, Any]: ...
 
     def get_snapshot(self, job_id: str) -> dict[str, Any]: ...
     def list_jobs(self, limit: int = 50) -> list[dict[str, Any]]: ...
@@ -295,9 +300,14 @@ class MockBackend:
     mode = "mock"
     supports_start = True
 
+    def __init__(self) -> None:
+        self._guided_directory: TemporaryDirectory | None = None
+        self._guided_jobs: set[str] = set()
+        self._guided_lock = RLock()
+
     def create_job(self, *, binary_bytes: bytes, filename: str, defect: str, valid_tests: str,
                    environment: str, valid_domain: str, forbidden: str, invalid_outcome: str,
-                   assumptions: str) -> str:
+                   assumptions: str, guided_contract: bool = False) -> str:
         job = demo.create_job(
             original_sha256=hashlib.sha256(binary_bytes).hexdigest(),
             filename=filename,
@@ -309,7 +319,36 @@ class MockBackend:
             invalid_outcome=invalid_outcome,
             assumptions=assumptions,
         )
+        if guided_contract:
+            with self._guided_lock:
+                if self._guided_directory is None:
+                    self._guided_directory = TemporaryDirectory(prefix="binaryrepair-guided-demo-")
+                guided_review.initialize(
+                    job["id"], job["contract"], data_dir=self._guided_directory.name,
+                    synthetic_job=job,
+                )
+                self._guided_jobs.add(job["id"])
         return job["id"]
+
+    def change_guided_review(self, job_id: str, action: str, body: dict[str, Any]) -> dict[str, Any]:
+        with self._guided_lock:
+            job = self._job(job_id)
+            if job_id not in self._guided_jobs or self._guided_directory is None:
+                raise BackendError(409, "This job does not use guided review.")
+            if action != "start" and job["run_started_at"] is not None:
+                raise BackendError(409, "This synthetic run has already started.")
+            try:
+                result = guided_review.change(
+                    job_id, action, body, data_dir=self._guided_directory.name, synthetic=True,
+                )
+            except guided_review.ReviewConflict as exc:
+                raise BackendError(409, str(exc)) from exc
+            except (TypeError, ValueError) as exc:
+                raise BackendError(422, str(exc)) from exc
+            if action == "start":
+                demo.start(job)
+                return {"run_id": "demo-run-" + job_id, "phase": job["phase"]}
+            return result
 
     def _job(self, job_id: str) -> dict[str, Any]:
         job = demo.get_job(job_id)
@@ -324,6 +363,8 @@ class MockBackend:
         snapshot["manifest_sha256"] = hashlib.sha256(
             json.dumps(tests, sort_keys=True, ensure_ascii=True).encode("utf-8")
         ).hexdigest()
+        if job_id in self._guided_jobs and self._guided_directory is not None:
+            snapshot.update(guided_review.read(job_id, data_dir=self._guided_directory.name) or {})
         return snapshot
 
     def list_jobs(self, limit: int = 50) -> list[dict[str, Any]]:
@@ -342,6 +383,8 @@ class MockBackend:
 
     def start(self, job_id: str, idempotency_key: str | None = None) -> dict[str, Any] | None:
         job = self._job(job_id)
+        if job_id in self._guided_jobs:
+            raise BackendError(409, "Use the guided review for this job.")
         if not job["contract"].get("approved"):
             raise BackendError(409, "Contract is not approved for this job.")
         demo.start(job)
@@ -369,6 +412,8 @@ class MockBackend:
         assumptions: str,
     ) -> dict[str, Any]:
         job = self._job(job_id)
+        if job_id in self._guided_jobs:
+            raise BackendError(409, "Use the guided review for this job.")
         current = job["contract"]["revision"]
         if str(expected_revision).strip() != str(current):
             raise BackendError(
@@ -388,6 +433,8 @@ class MockBackend:
         self, job_id: str, *, expected_sha256: str, reviewer_label: str
     ) -> dict[str, Any]:
         job = self._job(job_id)
+        if job_id in self._guided_jobs:
+            raise BackendError(409, "Use the guided review for this job.")
         current = job["contract"]["sha256"]
         if expected_sha256.strip().lower() != current:
             raise BackendError(
@@ -461,7 +508,15 @@ class HttpBackend:
             payload = response.json()
         except ValueError as exc:
             raise BackendError(502, f"Backend returned invalid JSON for {where}.") from exc
-        if _has_cjk_in_payload(payload):
+        policy_view = payload
+        if (where in {"get_snapshot", "guided_review"} and isinstance(payload, dict)
+            and isinstance(payload.get("technical_setup"), dict)
+            and isinstance(payload.get("contract"), dict)):
+            policy_view = {**payload, "contract": {
+                key: value for key, value in payload["contract"].items()
+                if key not in guided_review.ANSWER_KEYS
+            }}
+        if _has_cjk_in_payload(policy_view):
             raise BackendError(
                 502,
                 f"Backend returned non-English data for {where} (language policy violation).",
@@ -484,7 +539,7 @@ class HttpBackend:
                 payload = None
             if isinstance(payload, dict) and isinstance(payload.get("detail"), str):
                 detail = payload["detail"]
-            status = response.status_code if response.status_code in (400, 404, 409, 422) else 502
+            status = response.status_code if response.status_code in (400, 404, 409, 413, 422) else 502
             raise BackendError(status, detail)
 
         if response.status_code == 204 or not response.content:
@@ -494,7 +549,7 @@ class HttpBackend:
 
     def create_job(self, *, binary_bytes: bytes, filename: str, defect: str, valid_tests: str,
                    environment: str, valid_domain: str, forbidden: str, invalid_outcome: str,
-                   assumptions: str) -> str:
+                   assumptions: str, guided_contract: bool = False) -> str:
         payload = self._request(
             "POST",
             "/api/jobs",
@@ -508,12 +563,21 @@ class HttpBackend:
                 "forbidden": forbidden,
                 "invalid_outcome": invalid_outcome,
                 "assumptions": assumptions,
+                **({"guided_contract": "true"} if guided_contract else {}),
             },
         )
         job_id = payload.get("id") if isinstance(payload, dict) else None
         if not isinstance(job_id, str) or not job_id:
             raise BackendError(502, "Backend create_job response is missing a string 'id'.")
         return job_id
+
+    def change_guided_review(self, job_id: str, action: str, body: dict[str, Any]) -> dict[str, Any]:
+        payload = self._request(
+            "POST", f"/api/jobs/{job_id}/guided-review/{action}", where="guided_review", json=body,
+        )
+        if not isinstance(payload, dict):
+            raise BackendError(502, "The controller returned an invalid guided review response.")
+        return payload
 
     def get_snapshot(self, job_id: str) -> dict[str, Any]:
         payload = self._request("GET", f"/api/jobs/{job_id}", where="get_snapshot")
@@ -885,12 +949,20 @@ class LocalBackend:
 
     def create_job(self, *, binary_bytes: bytes, filename: str, defect: str, valid_tests: str,
                    environment: str, valid_domain: str, forbidden: str, invalid_outcome: str,
-                   assumptions: str) -> str:
+                   assumptions: str, guided_contract: bool = False) -> str:
+        try:
+            guided_answers = guided_review.draft_json(dict(
+                valid_domain=valid_domain, forbidden=forbidden,
+                invalid_outcome=invalid_outcome, assumptions=assumptions,
+            )) if guided_contract else None
+        except ValueError as exc:
+            raise BackendError(422, str(exc)) from exc
         record = job_store.create_job(
             original_bytes=binary_bytes,
             filename=filename,
             defect_description=defect or "Defect description not provided.",
             data_dir=self.data_dir,
+            guided_answers_json=guided_answers,
         )
         tests = [line.strip() for line in valid_tests.splitlines() if line.strip()]
         self._write_meta(
@@ -912,6 +984,17 @@ class LocalBackend:
         )
         return record.id
 
+    def change_guided_review(self, job_id: str, action: str, body: dict[str, Any]) -> dict[str, Any]:
+        self._record(job_id)
+        if action == "start":
+            raise BackendError(409, "Local controller mode does not implement run execution yet.")
+        try:
+            return guided_review.change(job_id, action, body, data_dir=self.data_dir)
+        except guided_review.ReviewConflict as exc:
+            raise BackendError(409, str(exc)) from exc
+        except (TypeError, ValueError) as exc:
+            raise BackendError(422, str(exc)) from exc
+
     def get_snapshot(self, job_id: str) -> dict[str, Any]:
         record = self._record(job_id)
         meta = self._read_meta(job_id)
@@ -931,6 +1014,7 @@ class LocalBackend:
             "cancelled": False,
             "contract": meta.get("contract") or self._contract(),
             "routes": self._placeholder_routes(record.phase),
+            **(guided_review.read(job_id, data_dir=self.data_dir) or {}),
         }
 
     def list_jobs(self, limit: int = 50) -> list[dict[str, Any]]:
@@ -968,6 +1052,8 @@ class LocalBackend:
         assumptions: str,
     ) -> dict[str, Any]:
         self._record(job_id)
+        if guided_review.read(job_id, data_dir=self.data_dir):
+            raise BackendError(409, "Use the guided review for this job.")
         meta = self._read_meta(job_id)
         contract = meta.get("contract") or self._contract()
         if str(expected_revision).strip() != str(contract["revision"]):
@@ -998,6 +1084,8 @@ class LocalBackend:
         self, job_id: str, *, expected_sha256: str, reviewer_label: str
     ) -> dict[str, Any]:
         self._record(job_id)
+        if guided_review.read(job_id, data_dir=self.data_dir):
+            raise BackendError(409, "Use the guided review for this job.")
         meta = self._read_meta(job_id)
         contract = meta.get("contract") or self._contract()
         if expected_sha256.strip().lower() != contract["sha256"]:

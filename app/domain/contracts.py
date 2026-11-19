@@ -25,6 +25,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -86,7 +87,8 @@ _REQUIRED_KEYS_V3_NONE = _BASE_KEYS + ("input_mode",)
 
 
 def _clean_text(
-    value: Any, field: str, limit: int = _MAX_TEXT, *, allow_empty: bool = False
+    value: Any, field: str, limit: int = _MAX_TEXT, *, allow_empty: bool = False,
+    unicode_prose: bool = False,
 ) -> str:
     if not isinstance(value, str):
         raise TypeError(f"{field} must be a string")
@@ -99,7 +101,10 @@ def _clean_text(
         raise ValueError(f"{field} must not be empty")
     if len(text) > limit:
         raise ValueError(f"{field} is longer than {limit} characters")
-    if not _TEXT_RE.match(text):
+    if unicode_prose:
+        if any(char not in "\n\t" and unicodedata.category(char).startswith("C") for char in text):
+            raise ValueError(f"{field} must use printable text")
+    elif not _TEXT_RE.match(text):
         raise ValueError(f"{field} must be printable ASCII")
     return text
 
@@ -117,12 +122,15 @@ def _clean_byte_text(value: Any, field: str, limit: int = _MAX_TEXT) -> str:
     return value
 
 
-def _clean_list(values: Iterable[Any], field: str, *, pattern: re.Pattern | None = None) -> tuple[str, ...]:
+def _clean_list(
+    values: Iterable[Any], field: str, *, pattern: re.Pattern | None = None,
+    unicode_prose: bool = False,
+) -> tuple[str, ...]:
     if isinstance(values, (str, bytes)):
         raise TypeError(f"{field} must be a sequence of strings, not a string")
     items = []
     for raw in values:
-        item = _clean_text(raw, field, _MAX_ITEM)
+        item = _clean_text(raw, field, _MAX_ITEM, unicode_prose=unicode_prose)
         if pattern is not None and not pattern.match(item):
             raise ValueError(f"{field} contains an invalid identifier: {item!r}")
         items.append(item)
@@ -181,12 +189,17 @@ class SecurityContract:
         object.__setattr__(
             self, "target_signature", _clean_text(self.target_signature, "target_signature", _MAX_ITEM)
         )
+        unicode_prose = self.schema_version == CONTRACT_SCHEMA_VERSION_NO_INPUT
         for field in ("valid_domain", "valid_behavior", "forbidden_behavior"):
-            object.__setattr__(self, field, _clean_text(getattr(self, field), field))
+            object.__setattr__(
+                self, field, _clean_text(
+                    getattr(self, field), field, unicode_prose=unicode_prose and field != "valid_behavior",
+                )
+            )
         if self.input_mode != "none":
             object.__setattr__(
                 self, "invalid_input_response",
-                _clean_text(self.invalid_input_response, "invalid_input_response"),
+                _clean_text(self.invalid_input_response, "invalid_input_response", unicode_prose=unicode_prose),
             )
 
         if not isinstance(self.dest_capacity_bytes, int) or isinstance(self.dest_capacity_bytes, bool):
@@ -224,7 +237,9 @@ class SecurityContract:
             self, "allowed_calls", _clean_list(self.allowed_calls, "allowed_calls", pattern=_ENTRY_RE)
         )
         for field in ("authorized_edits", "environment_assumptions", "required_obligations"):
-            object.__setattr__(self, field, _clean_list(getattr(self, field), field))
+            object.__setattr__(self, field, _clean_list(
+                getattr(self, field), field, unicode_prose=unicode_prose and field == "environment_assumptions"
+            ))
         unknown = [k for k in self.required_obligations if k not in OBLIGATION_KINDS]
         if unknown:
             raise ValueError(f"unknown obligation kinds: {unknown}")

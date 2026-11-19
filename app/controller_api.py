@@ -50,7 +50,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from app.db.connection import connect
-from app.services import jobs
+from app.services import guided_review, jobs
 
 APP_ENV = "BINARYREPAIR_DATA_DIR"
 DEFAULT_DATA_DIR = "var"
@@ -800,6 +800,7 @@ def _snapshot(record: jobs.JobRecord, meta: dict[str, Any]) -> dict[str, Any]:
             "reviewed_scope_sha256": run.reviewed_scope_sha256,
         } if run is not None else None,
         "verdict": run_verdict,
+        **(guided_review.read(record.id, data_dir=_data_dir()) or {}),
     }
 
 
@@ -879,6 +880,7 @@ async def create_job(
     forbidden: str = Form(""),
     invalid_outcome: str = Form(""),
     assumptions: str = Form(""),
+    guided_contract: bool = Form(False),
 ) -> dict[str, Any]:
     _require_english(
         {
@@ -915,11 +917,19 @@ async def create_job(
         )
 
     filename = _ascii_filename(raw_filename)
+    try:
+        guided_answers = guided_review.draft_json(dict(
+            valid_domain=valid_domain, forbidden=forbidden,
+            invalid_outcome=invalid_outcome, assumptions=assumptions,
+        )) if guided_contract else None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     record = jobs.create_job(
         original_bytes=payload,
         filename=filename,
         defect_description=defect or "Defect description not provided.",
         data_dir=_data_dir(),
+        guided_answers_json=guided_answers,
     )
     tests = [line.strip() for line in valid_tests.splitlines() if line.strip()]
     contract = _contract_body(
@@ -954,9 +964,26 @@ def get_snapshot(job_id: str) -> dict[str, Any]:
     return _snapshot(record, _read_meta(job_id))
 
 
+@app.post("/api/jobs/{job_id}/guided-review/{action}")
+def change_guided_review(job_id: str, action: str, body: dict[str, Any]) -> dict[str, Any]:
+    _job_or_404(job_id)
+    try:
+        return guided_review.change(job_id, action, body, data_dir=_data_dir())
+    except guided_review.ReviewConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _require_legacy_review(job_id: str) -> None:
+    if guided_review.read(job_id, data_dir=_data_dir()) is not None:
+        raise HTTPException(status_code=409, detail="Use the guided review for this job.")
+
+
 @app.post("/api/jobs/{job_id}/start", status_code=202)
 def start(job_id: str, request: Request) -> dict[str, Any]:
     record = _job_or_404(job_id)
+    _require_legacy_review(job_id)
     if record.phase == "cancelled":
         raise HTTPException(status_code=409, detail="Job is cancelled; a new job is required.")
     meta = _read_meta(job_id)
@@ -1049,6 +1076,7 @@ def update_contract(
     assumptions: str = Form(""),
 ) -> dict[str, Any]:
     _job_or_404(job_id)
+    _require_legacy_review(job_id)
     meta = _read_meta(job_id)
     contract = dict(meta.get("contract") or _contract_body())
     current = int(contract.get("revision", 1))
@@ -1074,6 +1102,7 @@ def update_contract(
 @app.post("/api/jobs/{job_id}/approve")
 async def approve(job_id: str, request: Request) -> dict[str, Any]:
     record = _job_or_404(job_id)
+    _require_legacy_review(job_id)
     meta = _read_meta(job_id)
     content_type = (request.headers.get("content-type") or "").lower()
 
@@ -1158,6 +1187,7 @@ async def approve(job_id: str, request: Request) -> dict[str, Any]:
 @app.post("/api/jobs/{job_id}/runs")
 def start_canonical(job_id: str, body: RunRequest) -> JSONResponse:
     record = _job_or_404(job_id)
+    _require_legacy_review(job_id)
     if record.phase == "cancelled":
         raise HTTPException(status_code=409, detail="Job is cancelled; a new job is required.")
     contract = jobs.get_contract(job_id, body.contract_revision, data_dir=_data_dir())

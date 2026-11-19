@@ -5,12 +5,14 @@ import {getTheme, setTheme} from '../shared/theme.mjs';
 import {label} from './chat-copy.mjs';
 import {chatLive} from './chat-live.mjs';
 import {chatPreview} from './chat-stream.mjs';
+import {createContractWizard, guidedContractCard} from './contract-wizard.mjs';
 import {openModel, openSearch, openSettings} from './chat-dialogs.mjs';
 import {appMark, paintSidebar, sidebar} from './chat-nav.mjs';
 import {bindSidebarSpring} from './chat-spring.mjs';
 import {refreshStepCard} from './chat-steps.mjs';
 import {control, displayTitle, renderItem, transcript} from './chat-view.mjs';
 import {activityTypes, createExecution, elapsed} from './chat-workspace.mjs';
+import {readTypedContract} from './typed-review.mjs';
 
 const root = document.documentElement;
 const app = document.querySelector('#app');
@@ -55,6 +57,7 @@ function announce(chat, event) {
 }
 
 const engine = previewMode ? chatPreview({notify: announce}) : chatLive({notify: announce});
+const wizard = createContractWizard({locale: () => locale, refresh: chat => engine.refresh(chat), repaint: requestPaint});
 const requestedJob = params.get('job');
 Promise.resolve(engine.seed(locale)).then(() => {
   if (!requestedJob) return;
@@ -68,7 +71,8 @@ if (!requestedJob && !previewMode) {
 }
 const media = matchMedia('(max-width: 720px)');
 
-const currentDraft = () => drafts.get(selected.id) ?? {text: '', attachment: '', file: null};
+const draftFor = chat => drafts.get(chat.id) ?? {text: '', attachment: '', file: null};
+const currentDraft = () => draftFor(selected);
 const setDraft = updates => drafts.set(selected.id, {...currentDraft(), ...updates});
 const busy = chat => ['running', 'awaiting_user', 'cancel_requested', 'queued', 'waiting_for_executor'].includes(chat.phase);
 const atEnd = () => nodes.scroll.scrollHeight - nodes.scroll.scrollTop - nodes.scroll.clientHeight < 60;
@@ -86,7 +90,10 @@ function requestPaint() {
 
 function select(chat, focusInput = false) {
   const changed = selected !== chat;
-  if (changed) engine.deactivate?.();
+  if (changed) {
+    wizard.dialog.close();
+    engine.deactivate?.();
+  }
   selected = chat;
   selectionChanged ||= changed;
   nodes.navDialog.close();
@@ -99,27 +106,37 @@ function select(chat, focusInput = false) {
     nodes.hero.hidden = true;
     paint();
     resize();
-    if (chat.jobId) void engine.activate?.(chat);
+    void engine.activate?.(chat);
   }
   if (focusInput) nodes.input.focus();
   else if (changed) nodes.scroll.focus({preventScroll: true});
 }
 
 function newChat() {
-  if (selected.events.length === 0 && !currentDraft().text && !currentDraft().attachment) return select(selected, true);
+  const draft = currentDraft();
+  if (!busy(selected) && selected.events.length === 0 && !draft.text && !draft.attachment && !draft.typedContract) {
+    return select(selected, true);
+  }
   select(engine.create(), true);
 }
 
-function send(text) {
-  if (!text.trim() || (engine.live && busy(selected))) return;
-  const {attachment, file} = currentDraft();
+async function send(text) {
+  if (!text.trim() || selected.contractSelection || (engine.live && busy(selected))) return;
+  const chat = selected;
+  const {attachment, file, typedContract} = currentDraft();
   if (engine.live && !selected.jobId && (!file || !isAscii(text.trim()))) {
     nodes.composerFeedback.textContent = t(file ? 'asciiDefect' : 'needFile');
     return;
   }
   nodes.composerFeedback.textContent = '';
-  engine.send(selected, text, locale, attachment, file);
-  setDraft({text: '', attachment: '', file: null});
+  const creating = engine.live && !chat.jobId;
+  const result = engine.send(chat, text, locale, attachment, file, typedContract);
+  if (creating && !await result) {
+    if (selected === chat && chat.creationError) nodes.composerFeedback.textContent = chat.creationError;
+    return;
+  }
+  drafts.delete(chat.id);
+  if (selected !== chat) return;
   nodes.input.value = '';
   resize();
   paint();
@@ -185,9 +202,9 @@ function mount() {
   const openExecution = control(t('execution'), () => changePane(true), {glyph: 'terminal', tone: 'compact-only',
     'aria-controls': 'execution-pane'});
   const execution = createExecution(t, () => changePane(false));
+  const sessionLabel = el('span');
   const header = el('header', {class: 'chat-header'}, openNav, title,
-    el('span', {class: 'preview-label'}, el('span', {'aria-hidden': 'true'}),
-      t(engine.live ? 'liveLabel' : 'preview')), openExecution, language);
+    el('span', {class: 'preview-label'}, el('span', {'aria-hidden': 'true'}), sessionLabel), openExecution, language);
   const heroAttach = engine.live
     ? control(t('attachBinary'), () => file.click(), {glyph: 'file', tone: 'primary hero-attach'})
     : null;
@@ -196,9 +213,10 @@ function mount() {
     el('p', {}, t(engine.live ? 'helpLive' : 'help')),
     heroAttach ?? control(t('sample'), () => send(t('samplePrompt')), {glyph: 'arrow', tone: 'sample'}));
   const log = el('div', {class: 'transcript', role: 'log', 'aria-live': 'off', 'aria-label': t('chats')});
+  const contractSlot = el('div', {class: 'transcript guided-contract-slot', hidden: true});
   const scroll = el('div', {class: 'chat-scroll', tabindex: '0', onscroll: () => {
     if (nodes) nodes.latest.hidden = atEnd();
-  }}, hero, log);
+  }}, hero, log, contractSlot);
   const composerFeedback = el('p', {class: 'composer-feedback', role: 'status'});
   const input = el('textarea', {rows: '1', value: currentDraft().text, maxlength: '4000',
     'aria-label': t('composer'), oninput: () => {
@@ -220,8 +238,37 @@ function mount() {
     paintComposer();
     if (picked) input.focus({preventScroll: true});
   }});
+  const contractFile = el('input', {type: 'file', accept: '.json,application/json', hidden: true, onchange: async () => {
+    const source = contractFile.files[0];
+    contractFile.value = '';
+    if (!source) return;
+    const chat = selected;
+    const selection = Symbol();
+    chat.contractSelection = selection;
+    paintComposer();
+    try {
+      const typedContract = await readTypedContract(source);
+      if (chat.contractSelection !== selection || chat.jobId || busy(chat)) return;
+      drafts.set(chat.id, {...draftFor(chat), typedContract});
+      if (selected === chat) {
+        nodes.composerFeedback.textContent = '';
+        nodes.input.focus({preventScroll: true});
+      }
+    } catch (error) {
+      if (selected === chat && chat.contractSelection === selection) {
+        nodes.composerFeedback.textContent = t(error.code === 'payload_too_large' ? 'contractFileTooLarge' : 'invalidContractFile');
+      }
+    } finally {
+      if (chat.contractSelection === selection) {
+        chat.contractSelection = null;
+        if (selected === chat) paintComposer();
+      }
+    }
+  }});
   const attached = el('div', {class: 'attached', hidden: true});
+  const attachedContract = el('div', {class: 'attached', hidden: true});
   const attach = control(t(engine.live ? 'attachBinary' : 'attach'), () => file.click(), {glyph: 'plus'});
+  const attachContract = control(t('attachContract'), () => contractFile.click(), {glyph: 'file'});
   const stop = control(t('stop'), () => engine.stop(selected), {glyph: 'stop', tone: 'stop'});
   const sendButton = control(t('send'), null, {type: 'submit', glyph: 'up', compact: true, tone: 'primary send-button'});
   const queue = control(t('queue'), null, {type: 'submit', tone: 'queue'});
@@ -229,7 +276,8 @@ function mount() {
   const composer = el('form', {class: 'composer', onsubmit: event => {
     event.preventDefault();
     send(input.value);
-  }}, attached, input, composerFeedback, el('div', {class: 'composer-tools'}, file, attach, el('span', {class: 'spacer'}), stop, queue, sendButton));
+  }}, attached, attachedContract, input, composerFeedback, el('div', {class: 'composer-tools'},
+    file, attach, contractFile, attachContract, el('span', {class: 'spacer'}), stop, queue, sendButton));
 
   const left = el('section', {class: 'chat-main glass'}, el('div', {}, header, execution.metrics), scroll,
     el('footer', {class: 'composer-wrap'}, latest, composer));
@@ -239,10 +287,11 @@ function mount() {
     (open ? execution.scroll : openExecution).focus({preventScroll: true});
   }
   const rail = el('aside', {class: 'desktop-nav glass'}, nav.body);
-  app.replaceChildren(el('div', {class: 'chat-shell'}, rail, workspace, navDialog));
+  app.replaceChildren(el('div', {class: 'chat-shell'}, rail, workspace, navDialog, wizard.dialog));
   stopSpring = bindSidebarSpring(rail, nav.toggle);
   nodes = {rows: new Map(), list, mobileList, title, hero, heroAttach, log, scroll, input, composerFeedback,
-    latest, attach, attached, stop, sendButton, queue, language, navDialog, execution};
+    latest, attach, attached, attachContract, attachedContract, stop, sendButton, queue, language,
+    navDialog, execution, contractSlot, sessionLabel};
   nodes.workspace = workspace;
   navStamp = null;
   paint();
@@ -251,31 +300,52 @@ function mount() {
 }
 
 function paintComposer() {
-  const {input, stop, sendButton, queue, hero, heroAttach, attach, attached} = nodes;
+  const {input, stop, sendButton, queue, hero, heroAttach, attach, attached, attachContract, attachedContract} = nodes;
   const active = busy(selected);
   const live = Boolean(selected.live);
-  const {attachment, file} = currentDraft();
+  const {attachment, file, typedContract} = currentDraft();
   input.placeholder = t(selected.phase === 'awaiting_user' ? 'approvalTurn' :
     active ? 'waitingTurn' : selected.events.length ? 'followup' : 'placeholder');
   input.readOnly = active && live;
   stop.hidden = !active || !selected.run;
-  stop.disabled = selected.phase === 'cancel_requested';
+  stop.disabled = selected.cancelSubmitting || selected.phase === 'cancel_requested';
   sendButton.hidden = active;
-  sendButton.disabled = !input.value.trim() || (live && !selected.jobId && !file);
+  sendButton.disabled = !input.value.trim() || Boolean(selected.contractSelection) || (live && !selected.jobId && !file);
   queue.hidden = !active || live;
   queue.disabled = !input.value.trim();
   const showHeroAttach = live && !hero.hidden && !file && !selected.jobId;
   if (heroAttach) heroAttach.hidden = !showHeroAttach;
+  if (heroAttach) heroAttach.disabled = active;
   attach.hidden = live ? showHeroAttach || Boolean(selected.jobId) : selected.events.length > 0;
+  attach.disabled = live && active;
+  attachContract.hidden = !live || Boolean(selected.jobId);
+  attachContract.disabled = active;
   if (attached.dataset.filename !== attachment) {
     attached.dataset.filename = attachment;
     attached.replaceChildren(el('span', {}, icon('file', 15), attachment), control(t('remove'), () => {
+      if (selected.live && busy(selected)) return;
       setDraft({attachment: '', file: null});
       paintComposer();
       (heroAttach && !heroAttach.hidden ? heroAttach : input).focus();
     }, {glyph: 'x', compact: true}));
   }
   attached.hidden = !attachment;
+  const contractName = typedContract?.name ?? '';
+  if (attachedContract.dataset.filename !== contractName) {
+    attachedContract.dataset.filename = contractName;
+    attachedContract.replaceChildren(el('span', {}, icon('file', 15), t('attachContract') + ' · ' + contractName),
+      control(t('removeContract'), () => {
+        if (busy(selected)) return;
+        setDraft({typedContract: undefined});
+        paintComposer();
+        attachContract.focus();
+      }, {glyph: 'x', compact: true}));
+  }
+  attachedContract.hidden = !contractName;
+  for (const item of [attached, attachedContract]) {
+    const remove = item.querySelector('button');
+    if (remove) remove.disabled = live && active;
+  }
 }
 
 function paint() {
@@ -285,6 +355,7 @@ function paint() {
   selectionChanged = false;
   navStamp = paintSidebar({chats: engine.chats, selected, lists: [nodes.list, nodes.mobileList], navStamp, t, select});
   nodes.title.textContent = displayTitle(selected, t);
+  nodes.sessionLabel.textContent = t(engine.live && !selected.demo ? 'liveLabel' : 'preview');
   nodes.hero.hidden = selected.events.length > 0;
   const beforeRun = selected.live ? !selected.execution?.run_id : selected.kind !== 'repair';
   nodes.workspace.classList.toggle('before-run', beforeRun);
@@ -298,9 +369,11 @@ function paint() {
   nodes.execution.update(selected, items);
   const latestApproval = items.findLast(item => item.type === 'awaiting_user' && item.decision === 'approve');
   for (const item of items) {
+    if ((selected.technicalSetup || selected.typedReview) && item.type === 'awaiting_user') continue;
     const previous = nodes.rows.get(item.key);
     const flags = item.type === 'awaiting_user' && item.decision === 'approve' ? selected.phase + selected.startReady :
-      item.type === 'error' ? selected.phase + selected.run : '';
+      item.type === 'error' ? selected.phase + selected.run :
+      item.type === 'user_message' ? JSON.stringify(item.payload.attachment_ids.map(id => selected.attachmentNames.get(id))) : '';
     if (previous?.item === item && previous.flags === flags) continue;
     const row = renderItem(item, {t, locale, chat: selected, engine, latestApproval});
     if (!row) continue;
@@ -323,6 +396,24 @@ function paint() {
       (activityTypes.has(item.type) ? nodes.execution.groups.target(item, selected.run) : nodes.log).append(row);
     }
     nodes.rows.set(item.key, {row, item, flags});
+  }
+  const slot = nodes.contractSlot;
+  const signature = selected.technicalSetup || selected.typedReview ? JSON.stringify([
+    selected.jobId, selected.contract?.revision, selected.contract?.approved,
+    selected.contract?.review_binding_digest, selected.typedReview, selected.attachingContract,
+    selected.typedAttachmentError, selected.reviewRefreshRequired, selected.reviewRefreshPending,
+    selected.starting, selected.startAcknowledged,
+    selected.execution?.run_id, selected.execution?.terminal, selected.phase, wizard.hasAnswers(selected),
+  ]) : '';
+  if (slot.dataset.state !== signature) {
+    const card = guidedContractCard(selected, {t, locale, engine, wizard});
+    slot.replaceChildren(...(card ? [card] : []));
+    slot.hidden = !card;
+    slot.dataset.state = signature;
+  }
+  if (selected.openContract && selected.technicalSetup && !wizard.dialog.open) {
+    selected.openContract = false;
+    wizard.show(selected, 'answers');
   }
   if (stick) jump();
   else nodes.latest.hidden = atEnd();
@@ -349,3 +440,4 @@ setInterval(() => {
 }, 250);
 
 mount();
+void engine.activate?.(selected);

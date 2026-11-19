@@ -113,24 +113,33 @@ export const live = {
   saveProviderKey: key => request('/api/assistant/key', {
     method: 'POST', headers: {'Content-Type': 'application/json'}, body: json({key}), retry: false,
   }),
-  create: async ({defect, file}) => {
+  create: async ({defect, file, guided = false, contractText}) => {
     const form = new FormData();
     form.append('binary', file, file.name);
     form.append('defect', defect);
-    const data = await request('/api/jobs', {method: 'POST', body: form});
+    if (contractText !== undefined) form.append('contract', contractText);
+    else if (guided) form.append('guided_contract', 'true');
+    const data = await request('/api/jobs', {method: 'POST', body: form, retry: contractText === undefined});
     return data.id;
   },
+  attachTypedContract: (id, contract) => request(jobPath(id) + '/typed-contract', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: json({contract}), retry: false,
+  }),
   save: (id, fields, revision) => request(jobPath(id) + '/contract', {
     method: 'POST',
     body: json({expected_revision: revision, ...fields}),
+  }),
+  setup: (id, details, revision) => request(jobPath(id) + '/technical-setup', {
+    method: 'POST',
+    body: json({expected_revision: revision, ...details}),
   }),
   approve: (id, digest, reviewer) => request(jobPath(id) + '/approve', {
     method: 'POST',
     body: json({expected_sha256: digest, reviewer_label: reviewer}),
   }),
-  start: (id, digest) => request(jobPath(id) + '/start', {
+  start: (id, digest, idempotencyKey = crypto.randomUUID()) => request(jobPath(id) + '/start', {
     method: 'POST',
-    headers: {'Idempotency-Key': crypto.randomUUID()},
+    headers: {'Idempotency-Key': idempotencyKey},
     body: json({expected_sha256: digest}),
   }),
   cancel: (id, runId) => request(jobPath(id) + '/cancel', {

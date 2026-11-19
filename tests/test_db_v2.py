@@ -50,10 +50,10 @@ def _run(conn: sqlite3.Connection, run_id: str = "r1", key: str = "k1") -> None:
 def test_init_creates_baseline_and_ai_tables(tmp_path: Path) -> None:
     conn = init_db(tmp_path)
     versions = [r[0] for r in conn.execute("SELECT version FROM schema_migrations ORDER BY 1")]
-    assert versions == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert versions == [1, 2, 3, 4, 5, 6, 7, 8, 9]
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"jobs", "artifacts", "contracts", "runs", "attempts",
-            "obligations", "events", "model_calls"} <= tables
+            "obligations", "events", "model_calls", "guided_reviews"} <= tables
     # ``schema.sql`` is only the v1 baseline; 002 creates model_calls and
     # 007/008 add the assistant columns. A single init_db call must cover both,
     # or usage rows cannot be written on a freshly created database.
@@ -83,7 +83,7 @@ def test_init_creates_baseline_and_ai_tables(tmp_path: Path) -> None:
 def test_reinit_is_idempotent(tmp_path: Path) -> None:
     init_db(tmp_path).close()
     conn = init_db(tmp_path)
-    assert [r[0] for r in conn.execute("SELECT version FROM schema_migrations ORDER BY 1")] == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert [r[0] for r in conn.execute("SELECT version FROM schema_migrations ORDER BY 1")] == [1, 2, 3, 4, 5, 6, 7, 8, 9]
     conn.close()
 
 

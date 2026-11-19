@@ -39,13 +39,21 @@ python -m app.services.worker --data-dir "$PWD\var" --poll 2
 ## Conversation behaviour
 
 * The first turn needs an attached binary and an ASCII defect description.
-* `POST /api/jobs` creates the draft; the contract card appears in the transcript.
+* The conversation creates a guided draft and opens the four-question contract
+  dialog. Closing it keeps the current task's draft in the open page.
+* With the reviewed-binding backend, the conversation accepts typed contract
+  JSON alongside the binary or on an eligible unedited draft. The review card
+  shows the six server binding values, including the canonical contract digest.
+* Technical setup is reviewed separately. The reviewer confirms the target and
+  execution settings and attaches test manifests bound to the uploaded file.
+  The contract card lists anything that still blocks approval.
 * Approval uses `contract.review_binding_digest`; a content-only hash is rejected
   by the server as a stale approval. The reviewer name is required.
-* Edit reopens the valid-input scope; the server keeps the other saved fields and
-  advances the revision.
+* The contract card can edit each field. Changed answers and technical setup
+  advance the revision and require a new approval.
 * Start and cancel are explicit. Polling follows `execution.terminal`; a missing
   or unfinalized evaluation stays pending and is never shown as success.
+  Start retries for the same binding reuse the original idempotency key.
 * The run summary links to the archive for checks, artifacts, export and the
   deliverable upload. Deliverables are not acceptance evidence.
 * Every `/api/...` request sends `X-BinaryRepair-Contract-Version: 1`; writes add
@@ -67,9 +75,9 @@ conversation; the archive focuses on state, checks and evidence.
 System font stack, one indigo accent, neutral glass surfaces, visible keyboard
 focus, 150 ms or shorter transitions, and solid surfaces under reduced
 transparency. Status is always written as text in addition to colour. UI copy
-switches between English and Simplified Chinese; submitted data (defect, contract
-fields, reviewer label, filenames) stays ASCII because the backend rejects
-non-ASCII input.
+switches between English and Simplified Chinese. Guided contract prose accepts
+both languages. Defect descriptions, reviewer labels, and technical identifiers
+retain their existing ASCII constraints.
 
 Tests: `tests/test_ui_v1_api.py` (contract shape, CSRF, review binding, stale
 paths, cancellation, planning, welcome/chat/archive routes) and

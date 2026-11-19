@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -143,6 +145,7 @@ def create_job(
     filename: str,
     defect_description: str,
     data_dir: str | Path,
+    guided_answers_json: str | None = None,
 ) -> JobRecord:
     if not isinstance(original_bytes, (bytes, bytearray)):
         raise TypeError("original_bytes must be bytes")
@@ -176,6 +179,11 @@ def create_job(
                     created_at,
                 ),
             )
+            if guided_answers_json is not None:
+                connection.execute(
+                    "INSERT INTO guided_reviews (job_id, revision, answers_json) VALUES (?, 1, ?)",
+                    (job_id, guided_answers_json),
+                )
     finally:
         connection.close()
 
@@ -232,6 +240,7 @@ def approve_contract(
     input_sha256: str | None = None,
     manifest_sha256: str | None = None,
     scope_sha256: str | None = None,
+    transaction: sqlite3.Connection | None = None,
 ) -> Approval:
     """Store the canonical reviewed contract and bind it to one job."""
 
@@ -249,7 +258,7 @@ def approve_contract(
     body_json = canonical_contract_json(contract.to_dict())
     contract_sha = contract_sha256(contract.to_dict())
 
-    connection = connect(data_dir)
+    connection = transaction if transaction is not None else connect(data_dir)
     try:
         job = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
         if job is None:
@@ -257,7 +266,7 @@ def approve_contract(
         if input_sha256 is not None and input_sha256 != job["original_sha256"]:
             raise ValueError("approved input hash does not match the stored job bytes")
 
-        with connection:
+        with connection if transaction is None else nullcontext():
             existing = connection.execute(
                 "SELECT * FROM contracts WHERE job_id = ? AND revision = ?",
                 (job_id, contract_revision),
@@ -291,7 +300,8 @@ def approve_contract(
                     (job_id,),
                 )
     finally:
-        connection.close()
+        if transaction is None:
+            connection.close()
 
     return Approval(
         job_id=job_id,
@@ -363,6 +373,7 @@ def start_run(
     approval: Approval | dict[str, Any] | None,
     idempotency_key: str,
     data_dir: str | Path,
+    transaction: sqlite3.Connection | None = None,
 ) -> RunRecord:
     """Start or return the run for (job, key), creating two queued attempts."""
 
@@ -373,9 +384,10 @@ def start_run(
     if _approval_field(approval, "job_id") != job_id:
         raise ValueError("approval belongs to a different job")
 
-    connection = connect(data_dir)
+    connection = transaction if transaction is not None else connect(data_dir)
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        if transaction is None:
+            connection.execute("BEGIN IMMEDIATE")
         try:
             existing = connection.execute(
                 "SELECT * FROM runs WHERE job_id = ? AND idempotency_key = ?",
@@ -391,7 +403,8 @@ def start_run(
                     raise ValueError(
                         "idempotency key already used with a different contract or manifest"
                     )
-                connection.commit()
+                if transaction is None:
+                    connection.commit()
                 return _run_record(existing, created=False)
 
             active = connection.execute(
@@ -436,12 +449,15 @@ def start_run(
                     (uuid.uuid4().hex, run_id, route),
                 )
             connection.execute("UPDATE jobs SET phase = 'queued' WHERE id = ?", (job_id,))
-            connection.commit()
+            if transaction is None:
+                connection.commit()
         except BaseException:
-            connection.rollback()
+            if transaction is None:
+                connection.rollback()
             raise
     finally:
-        connection.close()
+        if transaction is None:
+            connection.close()
 
     return RunRecord(
         id=run_id,

@@ -4,8 +4,9 @@
 // check and verdict comes from an API response. The only locally authored text
 // is a short status sentence derived from those values, and it is labelled as a
 // local summary, never as a model answer.
-import {currentEvaluation, live} from '../workbench/api.mjs';
+import {currentEvaluation, live as defaultApi} from '../workbench/api.mjs';
 import {label} from './chat-copy.mjs';
+import {canAttachTypedContract, isStaleReview, isTypedReview, missingTypedFields, readTypedContract} from './typed-review.mjs';
 
 const newId = () => crypto.randomUUID();
 const ACTIVE = new Set(['queued', 'waiting_for_executor', 'running', 'cancelling']);
@@ -20,7 +21,7 @@ const ms = value => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
-export function chatLive({notify = () => {}} = {}) {
+export function chatLive({notify = () => {}, api: live = defaultApi} = {}) {
   const chats = new Map();
   let locale = 'en';
   let active = null;
@@ -131,11 +132,18 @@ export function chatLive({notify = () => {}} = {}) {
     const contract = chat.contract || {};
     const execution = chat.execution || {};
     const evaluation = chat.data?.evaluation;
-    const terminal = Boolean(execution.terminal);
     const hasJob = Boolean(chat.jobId);
     const approved = Boolean(contract.approved);
-    const runId = execution.run_id;
     const finalized = Boolean(evaluation?.finalized);
+    const observedRunning = chat.events.some(event => event.run_id === execution.run_id &&
+      event.type === 'run_state' && event.payload.status === 'running');
+    const runStatus = ({
+      running: 'in_progress', completed: 'completed',
+      cancelling: observedRunning ? 'in_progress' : 'pending',
+      cancelled: observedRunning ? 'skipped' : 'not_run', failed: 'failed',
+    })[execution.status] ?? 'pending';
+    const verifyStatus = finalized ? 'completed' : execution.status === 'completed' ? 'in_progress' :
+      execution.terminal ? 'not_run' : 'pending';
     const artifacts = (Array.isArray(chat.data?.artifacts) ? chat.data.artifacts : [])
       .filter(item => item.kind === 'run_evidence' || item.kind === 'manual_deliverable');
     return [
@@ -144,9 +152,9 @@ export function chatLive({notify = () => {}} = {}) {
       {step_id: 'contract', label_code: 'planContract',
         status: approved ? 'completed' : hasJob ? 'in_progress' : 'pending'},
       {step_id: 'run', label_code: 'planRun',
-        status: runId ? (terminal ? 'completed' : 'in_progress') : 'pending'},
+        status: runStatus},
       {step_id: 'verify', label_code: 'planVerify',
-        status: finalized ? 'completed' : terminal ? 'in_progress' : 'pending'},
+        status: verifyStatus},
       {step_id: 'evidence', label_code: 'planEvidence',
         status: artifacts.length ? 'completed' : finalized ? 'not_run' : 'pending'},
     ];
@@ -308,7 +316,15 @@ export function chatLive({notify = () => {}} = {}) {
     chat.demo = snapshot.demo;
     chat.title = snapshot.defect || chat.title;
     chat.filename = snapshot.filename || chat.filename;
+    const previousDigest = chat.contract?.review_binding_digest;
+    chat.typedReview = isTypedReview(contract);
+    if (chat.typedReview && previousDigest && previousDigest !== contract.review_binding_digest) {
+      chat.reviewRefreshRequired = true;
+    }
+    if (chat.startAttempt?.digest !== contract.review_binding_digest) chat.startAttempt = null;
+    if (execution.run_id && execution.run_id === chat.startAcknowledged) chat.startAcknowledged = null;
     chat.contract = contract;
+    chat.technicalSetup = snapshot.technical_setup ?? null;
     chat.execution = execution;
     chat.data = {
       evaluation: currentEvaluation(snapshot, payload.evaluation ?? chat.data?.evaluation),
@@ -415,19 +431,23 @@ export function chatLive({notify = () => {}} = {}) {
   async function refresh(chat, {silent = false} = {}) {
     if (!chat.jobId) return;
     const epoch = chat.epoch;
+    const sequence = (chat.refreshSequence ?? 0) + 1;
+    chat.refreshSequence = sequence;
     try {
       const data = await read(chat);
-      if (!data || chat.epoch !== epoch) return;
+      if (!data || chat.epoch !== epoch || chat.refreshSequence !== sequence) return;
       clearError(chat);
       sync(chat, data.snapshot, data);
+      chat.reviewRefreshPending = false;
+      return true;
     } catch (error) {
-      if (!silent) fail(chat, error);
+      if (!silent && chat.refreshSequence === sequence) fail(chat, error);
     }
   }
 
   function shouldWatch(chat) {
     const execution = chat.execution || {};
-    if (ACTIVE.has(execution.status)) return true;
+    if (chat.startAcknowledged || ACTIVE.has(execution.status)) return true;
     if (execution.terminal && !chat.data?.evaluation?.finalized) {
       return Boolean(chat.pendingUntil) && Date.now() < chat.pendingUntil;
     }
@@ -447,8 +467,7 @@ export function chatLive({notify = () => {}} = {}) {
   }
 
   function watch(chat) {
-    active = chat;
-    schedule(chat);
+    if (active === chat) schedule(chat);
   }
 
   function deactivate() {
@@ -468,7 +487,7 @@ export function chatLive({notify = () => {}} = {}) {
     if (attachmentId) chat.attachmentNames.set(attachmentId, name || attachmentId);
   }
 
-  async function send(chat, text, loc, attachmentName = '', attachmentFile = null) {
+  async function send(chat, text, loc, attachmentName = '', attachmentFile = null, typedContract = null) {
     const clean = text.trim();
     if (!clean) return;
     locale = loc;
@@ -485,24 +504,87 @@ export function chatLive({notify = () => {}} = {}) {
       return;
     }
     chat.title = clean;
-    const messageId = newId();
-    const fileId = newId();
-    attach(chat, fileId, attachmentName || attachmentFile.name || 'binary');
-    event(chat, 'user_message', {
-      message_id: messageId, text: clean, attachment_ids: [fileId], delivery: 'accepted',
-    }, null, null);
+    chat.creationError = null;
     setPhase(chat, 'running');
     const epoch = ++chat.epoch;
     try {
-      const jobId = await live.create({defect: clean, file: attachmentFile});
+      const jobId = await live.create({
+        defect: clean, file: attachmentFile, guided: true, contractText: typedContract?.text,
+      });
       if (chat.epoch !== epoch) return;
       chat.jobId = jobId;
+      chat.seeded = true;
+      const fileId = newId();
+      attach(chat, fileId, attachmentName || attachmentFile.name || 'binary');
+      const ids = [fileId];
+      if (typedContract) {
+        const contractId = newId();
+        attach(chat, contractId, typedContract.name);
+        ids.push(contractId);
+      }
+      chat.attachmentIds = ids;
+      event(chat, 'user_message', {
+        message_id: newId(), text: clean, attachment_ids: ids, delivery: 'accepted',
+      }, null, null);
       await refresh(chat);
+      if (chat.technicalSetup) chat.openContract = true;
+      if (!chat.loaded) setPhase(chat, 'awaiting_user');
       say(chat, label(locale, 'jobCreated').replace('{id}', short(jobId)));
+      return true;
     } catch (error) {
       if (chat.epoch !== epoch) return;
+      chat.creationError = error?.message || label(locale, 'requestFailed');
+      setPhase(chat, 'idle');
       fail(chat, error);
+      return false;
     }
+  }
+
+  async function attachContract(chat, file) {
+    if (!file || !canAttachTypedContract(chat) || chat.attachingContract) return;
+    chat.attachingContract = true;
+    chat.typedAttachmentError = '';
+    notify(chat, null);
+    try {
+      const parsed = await readTypedContract(file);
+      await live.attachTypedContract(chat.jobId, parsed.document);
+      chat.reviewRefreshRequired = true;
+      chat.reviewRefreshPending = true;
+      if (!await refresh(chat, {silent: true})) {
+        chat.typedAttachmentError = label(locale, 'requestFailed');
+      }
+    } catch (error) {
+      chat.typedAttachmentError = error?.message || label(locale, 'requestFailed');
+      if (error.status === 409) await refresh(chat);
+    } finally {
+      chat.attachingContract = false;
+      notify(chat, null);
+    }
+  }
+
+  async function refreshReview(chat) {
+    if (!chat.typedReview && !chat.technicalSetup) return refresh(chat);
+    chat.reviewRefreshRequired = true;
+    chat.reviewRefreshPending = true;
+    notify(chat, null);
+    await refresh(chat, {silent: true});
+    notify(chat, null);
+  }
+
+  async function reviewBinding(chat, digest) {
+    if (chat.reviewRefreshPending) return refreshReview(chat);
+    if (!digest || digest !== chat.contract?.review_binding_digest) return refreshReview(chat);
+    chat.reviewRefreshRequired = false;
+    notify(chat, null);
+  }
+
+  function reviewReady(chat, renderedDigest) {
+    if (renderedDigest !== undefined && renderedDigest !== chat.contract?.review_binding_digest) {
+      void refreshReview(chat);
+      return false;
+    }
+    if (chat.reviewRefreshRequired) return false;
+    return !chat.typedReview || missingTypedFields(chat.contract).length === 0;
   }
 
   function followUp(chat, text) {
@@ -540,7 +622,7 @@ export function chatLive({notify = () => {}} = {}) {
     say(chat, label(locale, 'evaluationPending'));
   }
 
-  async function decide(chat, requestId, decision, editedFields = null, reviewer = '') {
+  async function decide(chat, requestId, decision, editedFields = null, reviewer = '', renderedDigest) {
     if (!chat.jobId || chat.requestId !== requestId) return;
     const contract = chat.contract || {};
     const binding = {
@@ -559,6 +641,7 @@ export function chatLive({notify = () => {}} = {}) {
       return;
     }
     if (decision === 'approve') {
+      if (!reviewReady(chat, renderedDigest)) return;
       const name = String(reviewer || chat.reviewer || '').trim();
       if (!name) {
         say(chat, label(locale, 'reviewerRequired'));
@@ -580,6 +663,7 @@ export function chatLive({notify = () => {}} = {}) {
         await refresh(chat);
       } catch (error) {
         fail(chat, error);
+        if (isStaleReview(error)) await refreshReview(chat);
       }
       return;
     }
@@ -606,41 +690,56 @@ export function chatLive({notify = () => {}} = {}) {
     }
   }
 
-  async function start(chat) {
+  async function start(chat, renderedDigest) {
     const contract = chat.contract || {};
-    if (!chat.jobId) return;
+    if (!chat.jobId || chat.starting || chat.startAcknowledged || !reviewReady(chat, renderedDigest)) return;
     if (!contract.approved) {
       say(chat, label(locale, 'approvalNeeded'));
       return;
     }
     if (ACTIVE.has(chat.execution?.status)) return;
+    const digest = contract.review_binding_digest;
+    if (!digest) return;
+    if (chat.startAttempt?.digest !== digest) chat.startAttempt = {digest, key: newId()};
+    const {key} = chat.startAttempt;
+    chat.starting = true;
+    notify(chat, null);
     const epoch = ++chat.epoch;
     try {
-      const result = await live.start(chat.jobId, contract.review_binding_digest);
+      const result = await live.start(chat.jobId, digest, key);
       if (chat.epoch !== epoch) return;
-      event(chat, 'run_state', {
-        kind: 'repair', job_id: chat.jobId, status: 'queued', message_id: null,
-      }, null, result.run_id);
+      if (typeof result?.run_id !== 'string' || !result.run_id) {
+        throw new Error('The start response did not identify a run.');
+      }
+      chat.startAcknowledged = result.run_id;
+      chat.startAttempt = null;
       await refresh(chat);
-      chat.pendingUntil = null;
       watch(chat);
     } catch (error) {
       fail(chat, error);
+      if (isStaleReview(error)) await refreshReview(chat);
+    } finally {
+      chat.starting = false;
+      notify(chat, null);
     }
   }
 
   async function stop(chat) {
     const runId = chat.execution?.run_id;
-    if (!chat.jobId || !runId) return;
+    if (!chat.jobId || !runId || chat.cancelSubmitting || chat.execution.status === 'cancelling') return;
+    chat.cancelSubmitting = true;
+    notify(chat, null);
     const epoch = ++chat.epoch;
     try {
-      setPhase(chat, 'cancel_requested');
       await live.cancel(chat.jobId, runId);
       if (chat.epoch !== epoch) return;
       await refresh(chat);
       watch(chat);
     } catch (error) {
       fail(chat, error);
+    } finally {
+      chat.cancelSubmitting = false;
+      notify(chat, null);
     }
   }
 
@@ -694,6 +793,6 @@ export function chatLive({notify = () => {}} = {}) {
 
   return {
     chats, live: true, create, send, decide, start, stop, upload, seed, activate,
-    deactivate, refresh, setLocale, reopen,
+    deactivate, refresh, setLocale, reopen, attachContract, reviewBinding,
   };
 }

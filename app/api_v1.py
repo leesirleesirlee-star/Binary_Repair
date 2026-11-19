@@ -273,6 +273,7 @@ def snapshot_payload(job_id: str) -> dict[str, Any]:
         "data_source": str(snapshot.get("data_source") or ("synthetic" if demo else "controller-http")),
         "contract": _contract_view(snapshot),
         "execution": _execution(snapshot),
+        **({"technical_setup": snapshot["technical_setup"]} if "technical_setup" in snapshot else {}),
     }
 
 
@@ -652,9 +653,26 @@ async def create_job(
     forbidden: str = Form(""),
     invalid_outcome: str = Form(""),
     assumptions: str = Form(""),
+    guided_contract: bool = Form(False),
 ) -> dict[str, Any]:
     require_v1(request)
     _require_csrf(request)
+    # This controller predates the typed-contract handoff. Decline the upload
+    # here so a multipart contract cannot be silently dropped during creation.
+    form = await request.form()
+    if "contract" in form:
+        contract = form["contract"]
+        if not isinstance(contract, str):
+            raise ApiError(422, "invalid_input", "The contract must be submitted as JSON text.")
+        if len(contract.encode("utf-8")) > MAX_FIELD_BYTES:
+            raise ApiError(413, "payload_too_large", "The contract exceeds the 16 KiB text limit.")
+        try:
+            document = json.loads(contract)
+        except ValueError as exc:
+            raise ApiError(422, "invalid_input", "The contract must be a JSON object.") from exc
+        if not isinstance(document, dict):
+            raise ApiError(422, "invalid_input", "The contract must be a JSON object.")
+        raise ApiError(409, "invalid_transition", "Typed contract uploads require the reviewed-binding backend.")
     for name, value in (
         ("defect", defect),
         ("valid_tests", valid_tests),
@@ -684,6 +702,7 @@ async def create_job(
             forbidden=forbidden,
             invalid_outcome=invalid_outcome,
             assumptions=assumptions,
+            **({"guided_contract": True} if guided_contract else {}),
         )
     except BackendError as exc:
         raise ApiError(_code_status(exc.status_code), _code_for(exc.status_code), exc.detail) from exc
@@ -727,6 +746,9 @@ async def update_contract(request: Request, job_id: str) -> dict[str, Any]:
                 "review_binding_digest": current["review_binding_digest"],
             },
         )
+    if "technical_setup" in snapshot:
+        result = _change_guided(job_id, "save", body)
+        return _revision_fields(result["contract"], _binding({**snapshot, **result}))
     fields: dict[str, str] = {}
     for key in ("valid_domain", "forbidden", "invalid_outcome", "assumptions"):
         value = body.get(key, None)
@@ -752,6 +774,41 @@ async def update_contract(request: Request, job_id: str) -> dict[str, Any]:
         "sha256": updated["sha256"],
         "review_binding_digest": updated["review_binding_digest"],
     }
+
+
+def _revision_fields(contract: dict[str, Any], binding: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "revision": contract["revision"], "sha256": contract["sha256"],
+        "review_binding_digest": binding_digest(binding, contract),
+    }
+
+
+def _change_guided(job_id: str, action: str, body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return _backend().change_guided_review(job_id, action, body)
+    except BackendError as exc:
+        if exc.status_code == 409:
+            current = _contract_view(_as_snapshot(job_id))
+            if body.get("expected_revision") != current["revision"]:
+                raise ApiError(
+                    409, "stale_revision", "The contract changed since this page loaded.",
+                    current={key: current[key] for key in ("revision", "sha256", "review_binding_digest")},
+                ) from exc
+        raise ApiError(_code_status(exc.status_code), _code_for(exc.status_code), exc.detail) from exc
+
+
+@router.post("/api/jobs/{job_id}/technical-setup")
+async def confirm_technical_setup(request: Request, job_id: str) -> dict[str, Any]:
+    require_v1(request)
+    _require_csrf(request)
+    body = await _json_body(request)
+    if type(body.get("expected_revision")) is not int:
+        raise ApiError(422, "invalid_input", "'expected_revision' must be an integer.")
+    snapshot = _as_snapshot(job_id)
+    if "technical_setup" not in snapshot:
+        raise ApiError(409, "invalid_transition", "This job does not use guided contract review.")
+    result = _change_guided(job_id, "setup", body)
+    return _revision_fields(result["contract"], _binding({**snapshot, **result}))
 
 
 @router.post("/api/jobs/{job_id}/approve")
@@ -789,6 +846,16 @@ async def approve_contract(request: Request, job_id: str) -> dict[str, Any]:
             "The review binding changed since this page loaded.",
             current=current,
         )
+    if "technical_setup" in snapshot:
+        result = _change_guided(job_id, "approve", {
+            "expected_revision": contract["revision"], "expected_sha256": contract["sha256"],
+            "reviewer_label": reviewer,
+        })
+        approved = result["contract"]
+        return {
+            "approved": approved["approved"], "sha256": approved["sha256"],
+            "review_binding_digest": expected, "approved_at": approved["approved_at"],
+        }
     try:
         _backend().approve_contract(
             job_id,
@@ -825,7 +892,9 @@ async def start_job(request: Request, job_id: str) -> dict[str, Any]:
         "sha256": contract["sha256"],
         "review_binding_digest": contract["review_binding_digest"],
     }
-    if execution["status"] in ACTIVE_STATUSES or execution["status"] == "unknown":
+    if "technical_setup" not in snapshot and (
+        execution["status"] in ACTIVE_STATUSES or execution["status"] == "unknown"
+    ):
         raise ApiError(
             409,
             "invalid_transition",
@@ -846,6 +915,11 @@ async def start_job(request: Request, job_id: str) -> dict[str, Any]:
             "The current approval does not cover this review binding.",
             current=current,
         )
+    if "technical_setup" in snapshot:
+        return _change_guided(job_id, "start", {
+            "expected_revision": contract["revision"], "expected_sha256": contract["sha256"],
+            "idempotency_key": key,
+        })
     try:
         result = _backend().start(job_id, idempotency_key=key) or {}
     except BackendError as exc:
