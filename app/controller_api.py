@@ -1698,15 +1698,31 @@ def generate_assistant(
     This writes exactly one ``assistant_plans`` row.  It cannot approve the
     contract, start a run, or write a verdict: the plan is guidance the user
     still has to act on through the normal endpoints.
+
+    ``mode="llm"`` runs a hosted model only for committed public-fixture jobs;
+    anything else fails closed with 403 before any provider call.
     """
-    _job_or_404(job_id)
+    job = _job_or_404(job_id)
     from app.services.assistant import generate_plan, get_plan
 
+    mode = _planner_mode(payload.mode if payload is not None else None)
+    client = None
+    if mode == "llm":
+        from app.services.assistant_llm import client_from_env
+        from app.services.plan_authorization import may_transfer_plan
+
+        if not may_transfer_plan(job.original_sha256):
+            raise HTTPException(
+                status_code=403,
+                detail="No transfer authorization covers this job for an external provider.",
+            )
+        client = client_from_env()
     try:
         generate_plan(
             job_id=job_id,
             data_dir=_data_dir(),
-            mode=_planner_mode(payload.mode if payload is not None else None),
+            mode=mode,
+            client=client,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

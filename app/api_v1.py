@@ -962,35 +962,48 @@ async def plan_job(request: Request, job_id: str) -> dict[str, Any]:
     mode = body.get("mode", "deterministic")
     if mode not in {"deterministic", "llm"}:
         raise ApiError(422, "invalid_input", "'mode' must be 'deterministic' or 'llm'.")
-    if mode == "llm":
-        # Contract 7.2: no trusted transfer authorization exists for arbitrary
-        # job material, so the external path fails closed before any call.
-        raise ApiError(
-            403,
-            "plan_transfer_not_authorized",
-            "No transfer authorization covers this job for an external provider.",
-        )
-    from app.domain.assistant import deterministic_plan
 
     snapshot = _as_snapshot(job_id)
-    plan = deterministic_plan(str(snapshot.get("defect") or ""))
+    description = str(snapshot.get("defect") or "").strip()
+
+    if mode == "llm":
+        # Only committed public-fixture material may leave the host for a
+        # hosted-provider plan. Client binaries and confidential derived
+        # content fail closed here, before any provider call.
+        from app.services.plan_authorization import may_transfer_plan
+
+        if not may_transfer_plan(snapshot.get("original_sha256")):
+            raise ApiError(
+                403,
+                "plan_transfer_not_authorized",
+                "No transfer authorization covers this job for an external provider.",
+            )
+        from app.services.assistant_llm import client_from_env, generate_plan
+
+        plan = generate_plan(description, client=client_from_env(), mode="llm")
+    else:
+        from app.domain.assistant import deterministic_plan
+
+        plan = deterministic_plan(description)
+
     plan_payload = plan.model_dump(mode="json")
     tokens = plan_payload.get("tokens")
     return {
         "plan": {
             "plan_id": plan_payload["plan_id"],
             "mode": plan_payload["mode"],
-            "fallback": False,
-            "model": None,
+            "fallback": plan_payload.get("fallback", False),
+            "fallback_reason": plan_payload.get("fallback_reason"),
+            "model": plan_payload.get("model"),
             "tokens": tokens,
             "steps": plan_payload["steps"],
         },
         "agent": {
-            "requested_mode": "deterministic",
-            "mode": "deterministic",
-            "fallback": False,
-            "fallback_code": None,
-            "model": None,
+            "requested_mode": mode,
+            "mode": plan_payload["mode"],
+            "fallback": plan_payload.get("fallback", False),
+            "fallback_code": plan_payload.get("fallback_reason"),
+            "model": plan_payload.get("model"),
             "tokens": tokens,
         },
     }

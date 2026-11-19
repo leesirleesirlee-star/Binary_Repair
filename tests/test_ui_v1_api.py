@@ -269,6 +269,44 @@ def test_llm_plan_fails_closed_without_transfer_authorization(client):
     assert local.json()["agent"]["fallback"] is False
 
 
+def test_llm_plan_is_authorized_for_public_fixture(client, monkeypatch):
+    from pathlib import Path
+
+    import app.services.assistant_llm as assistant_llm
+
+    fixture = (
+        Path(__file__).resolve().parents[1]
+        / "fixtures" / "public" / "CWE121_src_char_declare_cpy_51b" / "original.elf"
+    )
+    if not fixture.is_file():
+        pytest.skip("public fixture original.elf not present")
+    # No provider client: the authorized llm plan falls back to deterministic
+    # steps labelled llm + fallback, never a fabricated plan and never a real call.
+    monkeypatch.setattr(assistant_llm, "client_from_env", lambda: None)
+
+    created = client.post(
+        "/api/jobs",
+        headers={**V1, "x-csrf-token": "csrf-test"},
+        files={"binary": ("original.elf", fixture.read_bytes(), "application/octet-stream")},
+        data={"defect": "stack buffer overflow in copy_name"},
+    )
+    assert created.status_code == 201, created.text
+    job = created.json()
+
+    plan = client.post(
+        f"/api/jobs/{job['id']}/plan",
+        headers={**V1, "x-csrf-token": "csrf-test"},
+        json={"mode": "llm"},
+    )
+    assert plan.status_code == 200, plan.text
+    body = plan.json()
+    assert body["plan"]["mode"] == "llm"
+    assert body["plan"]["fallback"] is True
+    assert body["plan"]["fallback_reason"] == "llm_client_not_configured"
+    assert body["agent"]["fallback"] is True
+    assert body["plan"]["steps"]
+
+
 def test_legacy_no_header_shape_is_preserved(client):
     job = create_job(client)
     legacy = client.get(f"/api/jobs/{job['id']}")

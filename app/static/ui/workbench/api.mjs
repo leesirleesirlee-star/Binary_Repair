@@ -88,6 +88,10 @@ const query = (params) => {
 
 const json = value => JSON.stringify(value);
 const jobPath = id => '/api/jobs/' + encodeURIComponent(id);
+const providerConfigured = async () => {
+  const data = await request('/api/assistant/key');
+  return typeof data.configured === 'boolean' ? data.configured : null;
+};
 export const artifactUrl = id => '/api/artifacts/' + encodeURIComponent(id) + '/download';
 export const reportUrl = (id, runId) => jobPath(id) + '/export' + query({run_id: runId});
 
@@ -146,7 +150,21 @@ export const live = {
     method: 'POST',
     body: json({run_id: runId}),
   }),
-  plan: id => request(jobPath(id) + '/plan', {method: 'POST', body: json({mode: 'deterministic'})}),
+  plan: async id => {
+    let configured = null;
+    try { configured = await providerConfigured(); } catch { /* key status is best-effort */ }
+    if (configured) {
+      try {
+        return await request(jobPath(id) + '/plan', {method: 'POST', body: json({mode: 'llm'})});
+      } catch (error) {
+        if (error?.code !== 'plan_transfer_not_authorized') throw error;
+        // A non-public-fixture job cannot use the hosted plan; fall back to the
+        // deterministic guide, which is always available and is a different
+        // answer, never a deterministic plan labelled as the LLM path.
+      }
+    }
+    return request(jobPath(id) + '/plan', {method: 'POST', body: json({mode: 'deterministic'})});
+  },
   upload: async (id, file) => {
     const form = new FormData();
     form.append('file', file, file.name);
